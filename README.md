@@ -1,39 +1,73 @@
 # apk2img-ml
 
-APK から API 呼び出し系列を抽出し、埋め込み学習・ベクトル化・画像化まで行うための実験用ツール群です。  
-主なスクリプトは `src/apk2img-ml/legacy/` にまとまっています。
+APK から API トークンを抽出し、Doc2Vec 学習・推論・画像化まで行うためのツール群です。
 
-## このリポジトリでできること
-- APK から `smali` や API トークン列を抽出
-- API トークン列から `Doc2Vec` / `Word2Vec` / `FastText` を学習
-- ベクトルを `TSV` / `PNG` / `NPY` に変換
-- `sdhash` と `doc2vec` 画像を合成して RGB 画像を生成
+`legacy` は過去の実験コードを保管する領域として残し、現在の運用コードは `src/apk2img_ml/` に再構成しています。
 
-## 代表的な処理フロー
-1. APK から API トークンを作る（`apk2tokens_pipeline.py` / `apk2apis.py`）
-2. トークンで埋め込みを学習する（`train_doc2vec_from_api_tokens.py` など）
-3. 推論・可視化する（`api2vec-m.py` / `vec2png.py` / `embed2img.py`）
-4. 必要に応じて `sdhash` 系出力と統合する（`merge_sdhash_doc2vec.py`）
+## 現在のコード配置
 
-## ディレクトリ構成
-- `src/apk2img-ml/legacy/`: 実験スクリプト本体
-- `docs/`: 仕様・使い方ドキュメント
-- `tests/`: テスト用（現状は雛形のみ）
+- `src/apk2img_ml/extraction/`
+  - Androguard 抽出（主系）
+  - baksmali 抽出（フォールバック）
+  - apktool + smali 抽出（フォールバック）
+  - ハイブリッド実行パイプライン
+- `src/apk2img_ml/embedding/`
+  - Doc2Vec コーパス読込
+  - 学習
+  - 推論
+- `src/apk2img_ml/imaging/`
+  - DocVec TSV -> PNG 変換
+- `src/apk2img_ml/cnn/`
+  - CNN モデル定義ユーティリティ
+- `src/apk2img-ml/legacy/`
+  - 旧実験コード（変更禁止領域）
 
-## 依存関係
-### Python
-- Python 3.10+
-- 主なライブラリ: `numpy`, `gensim`, `pillow`, `tqdm`, `androguard`, `loguru`, `torch`, `torchvision`
+## CLI
 
-### 外部ツール（スクリプトに応じて必要）
-- `apktool`
-- `sdhash`
-- `java` + `baksmali.jar`
+インストール後、または `python -m apk2img_ml` で実行できます。
 
-## ドキュメント
-- ドキュメント入口: [docs/index.md](docs/index.md)
-- 各プログラム仕様: [docs/programs.md](docs/programs.md)
+### 1) API トークン抽出（Androguard 主系 + フォールバック）
 
-## 注意
-- `legacy` 配下は研究・検証スクリプト群のため、命名や実装に揺れがあります。
-- 一部ファイルは同一コードがファイル内で重複しています（仕様をまとめる際は最終定義を基準）。
+```bash
+python -m apk2img_ml extract \
+  --input-dir ./apks \
+  --output-dir ./api_corpus \
+  --backend hybrid \
+  --recursive \
+  --workers 4 \
+  --baksmali-jar ./baksmali.jar
+```
+
+`hybrid` は `androguard -> baksmali -> apktool` の順で試行します。
+
+### 2) Doc2Vec 学習
+
+```bash
+python -m apk2img_ml train-doc2vec \
+  --corpus-dir ./api_corpus \
+  --model-out ./models/doc2vec.model \
+  --docvecs-out ./features/docvecs_train.tsv
+```
+
+### 3) 学習済みモデルで推論
+
+```bash
+python -m apk2img_ml infer-doc2vec \
+  --corpus-dir ./api_corpus_test \
+  --model ./models/doc2vec.model \
+  --docvecs-out ./features/docvecs_test.tsv
+```
+
+### 4) ベクトル画像化
+
+```bash
+python -m apk2img_ml docvec-to-png \
+  --docvecs-tsv ./features/docvecs_train.tsv \
+  --output-dir ./images/train \
+  --mode flat
+```
+
+## 補足
+
+- `legacy` 配下は変更していません。
+- baksmali / apktool / sdhash は外部ツールとして別途インストールが必要です。

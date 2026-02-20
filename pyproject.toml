@@ -5,21 +5,31 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "apk2img-ml"
 version = "0.1.0"
-description = "Tools for APK-to-image and embedding workflows."
+description = "APK token extraction, Doc2Vec workflows, and image conversion tools."
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = []
-
-[tool.setuptools]
-package-dir = {"" = "src/apk2img-ml"}
-py-modules = [
-  "merge_sdhash_doc2vec",
-  "models_zoo",
-  "train_doc2vec_from_api_tokens",
-  "vec2png",
+dependencies = [
+  "gensim>=4.3",
+  "numpy>=1.24",
+  "pillow>=10.0",
+  "tqdm>=4.66",
+  "androguard>=4.1",
 ]
 
+[project.optional-dependencies]
+cnn = [
+  "torch>=2.0",
+  "torchvision>=0.15",
+]
+baksmali = []
+sdhash = []
+
+[project.scripts]
+apk2img-ml = "apk2img_ml.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
 [tool.setuptools.packages.find]
-where = ["src/apk2img-ml"]
-include = ["okr*"]
-namespaces = true
+where = ["src"]
+include = ["apk2img_ml*"]
