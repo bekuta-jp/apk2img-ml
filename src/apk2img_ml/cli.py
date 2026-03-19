@@ -8,6 +8,20 @@ from .extraction.config import TokenFilter
 from .extraction.pipeline import BackendOptions
 
 
+def _non_negative_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError(f"expected a non-negative integer, got: {value}")
+    return parsed
+
+
+def _positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError(f"expected a positive integer, got: {value}")
+    return parsed
+
+
 def _add_extract_parser(subparsers: argparse._SubParsersAction) -> None:
     parser = subparsers.add_parser("extract", help="Extract API tokens from APK files")
     parser.add_argument("--input-dir", type=Path, required=True)
@@ -44,7 +58,7 @@ def _add_train_doc2vec_parser(subparsers: argparse._SubParsersAction) -> None:
     parser.add_argument("--window", type=int, default=5)
     parser.add_argument("--min-count", type=int, default=1)
     parser.add_argument("--epochs", type=int, default=20)
-    parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument("--workers", type=_non_negative_int, default=4)
     parser.add_argument("--read-all-lines", action="store_true")
     parser.set_defaults(handler=_handle_train_doc2vec)
 
@@ -72,6 +86,28 @@ def _add_docvec_to_png_parser(subparsers: argparse._SubParsersAction) -> None:
     parser.add_argument("--vec-pix-rows", type=int, default=1)
     parser.add_argument("--vec-pix-cols", type=int, default=1)
     parser.set_defaults(handler=_handle_docvec_to_png)
+
+
+def _add_train_eval_mrun_parser(subparsers: argparse._SubParsersAction) -> None:
+    parser = subparsers.add_parser(
+        "train-eval-mrun",
+        help="Run repeated CNN train/validation/test evaluation on image folders",
+    )
+    parser.add_argument("--data-root", type=Path, required=True)
+    parser.add_argument(
+        "--model",
+        default="resnet50",
+        help="tiny|alexnet|vgg16|resnet50|densenet|mobilenet",
+    )
+    parser.add_argument("--epochs", type=int, default=15)
+    parser.add_argument("--batch", type=int, default=32)
+    parser.add_argument("--workers", type=_non_negative_int, default=4)
+    parser.add_argument("--in-ch", type=_positive_int, default=1)
+    parser.add_argument("--resize", type=str, default="256,256")
+    parser.add_argument("--seed", type=int, default=3407)
+    parser.add_argument("--runs", type=int, default=1)
+    parser.add_argument("--log-dir", type=Path, default=Path("logs"))
+    parser.set_defaults(handler=_handle_train_eval_mrun)
 
 
 def _handle_extract(args: argparse.Namespace) -> int:
@@ -197,6 +233,26 @@ def _handle_docvec_to_png(args: argparse.Namespace) -> int:
     return 0
 
 
+def _handle_train_eval_mrun(args: argparse.Namespace) -> int:
+    from .cnn.train_eval_mrun import TrainEvalConfig, run_train_eval_mrun
+
+    config = TrainEvalConfig(
+        data_root=args.data_root,
+        model=args.model,
+        epochs=args.epochs,
+        batch=args.batch,
+        workers=args.workers,
+        in_ch=args.in_ch,
+        resize=args.resize,
+        seed=args.seed,
+        runs=args.runs,
+        log_dir=args.log_dir,
+    )
+    result = run_train_eval_mrun(config)
+    print(f"Saved logs under: {result['run_dir']}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="apk2img-ml")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -205,6 +261,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_train_doc2vec_parser(subparsers)
     _add_infer_doc2vec_parser(subparsers)
     _add_docvec_to_png_parser(subparsers)
+    _add_train_eval_mrun_parser(subparsers)
 
     return parser
 

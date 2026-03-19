@@ -5,7 +5,9 @@
 ## 最初に読む
 
 - [../README.md](../README.md): 全体概要と実行例
+- [setup.md](setup.md): 依存関係と環境構築（pip / 外部ツール / conda）
 - [programs.md](programs.md): 新CLIと各モジュールの仕様
+- [current_changes.md](current_changes.md): 再構成と `train_eval_mrun` 移植の現状
 
 ## 重要
 

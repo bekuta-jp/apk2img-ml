@@ -94,7 +94,17 @@ def _replace_classifier(model: nn.Module, out_features: int) -> nn.Module:
     raise RuntimeError("unsupported classifier layout")
 
 
-def get_model(name: str, *, num_classes: int = 2, pretrained: bool = True, in_channels: int = 1) -> nn.Module:
+def get_model(
+    name: str,
+    *,
+    num_classes: int = 2,
+    pretrained: bool = True,
+    in_channels: int = 1,
+    in_ch: int | None = None,
+) -> nn.Module:
+    if in_ch is not None:
+        in_channels = in_ch
+
     key = name.lower()
 
     if key == "tiny":
@@ -119,8 +129,16 @@ def get_model(name: str, *, num_classes: int = 2, pretrained: bool = True, in_ch
 
 
 class Tiny3Conv(nn.Module):
-    def __init__(self, *, num_classes: int = 2, in_channels: int = 1):
+    def __init__(
+        self,
+        *,
+        num_classes: int = 2,
+        in_channels: int = 1,
+        in_ch: int | None = None,
+    ):
         super().__init__()
+        if in_ch is not None:
+            in_channels = in_ch
         self.features = nn.Sequential(
             nn.Conv2d(in_channels, 32, 3, padding=1),
             nn.ReLU(),
@@ -132,6 +150,8 @@ class Tiny3Conv(nn.Module):
             nn.ReLU(),
             nn.MaxPool2d(2),
         )
+        # Preserve the legacy 256x256 path while allowing arbitrary input sizes.
+        self.pool = nn.AdaptiveAvgPool2d((32, 32))
         self.classifier = nn.Sequential(
             nn.Flatten(),
             nn.Linear(128 * 32 * 32, 256),
@@ -141,4 +161,6 @@ class Tiny3Conv(nn.Module):
         )
 
     def forward(self, x):  # noqa: D401
-        return self.classifier(self.features(x))
+        x = self.features(x)
+        x = self.pool(x)
+        return self.classifier(x)

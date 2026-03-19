@@ -2,6 +2,8 @@
 
 このページは `src/apk2img_ml/` の運用コードを対象にしています。
 
+依存関係と環境構築は [setup.md](setup.md) を参照してください。
+
 ## CLI 一覧
 
 共通実行形式:
@@ -58,6 +60,33 @@ DocVec TSV をグレースケール画像へ変換します。
 - `--mode {flat,grid,raw32}`
 - `--grid-rows`, `--grid-cols`, `--vec-pix-rows`, `--vec-pix-cols`
 
+### `train-eval-mrun`
+
+画像フォルダを使って CNN の学習・検証・テストを複数回実行します。
+
+主オプション:
+
+- `--data-root`
+- `--model {tiny,alexnet,vgg16,resnet50,densenet,mobilenet}`
+- `--epochs`, `--batch`, `--workers`
+- `--in-ch`
+- `--resize`
+- `--seed`, `--runs`
+- `--log-dir`
+
+挙動:
+
+- `dev/` を `8:2` で train/val に分割
+- `test/` で最終評価
+- `train_log.json`, `lr_curves.png`, `loss_curves.png`, `val_acc_curves.png` を保存
+
+互換性と拡張:
+
+- `legacy/train_eval_mrun.py` の基本挙動を維持
+- `--workers 0` を有効化
+- 任意チャネル数に対応
+- `tiny` は `256x256` 互換を保ちながら任意入力サイズに対応
+
 ## モジュール構成
 
 - `apk2img_ml.extraction`
@@ -72,6 +101,7 @@ DocVec TSV をグレースケール画像へ変換します。
   - `docvec_png.py`
 - `apk2img_ml.cnn`
   - `models.py`
+  - `train_eval_mrun.py`
 
 ## Legacy について
 
