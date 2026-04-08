@@ -145,7 +145,7 @@ PYTHONPATH=src python3 -m apk2img_ml train-eval-mrun \
   --resize 256,256 \
   --seed 3407 \
   --runs 3 \
-  --log-dir ./logs
+  --log-dir ./results/train_eval_mrun
 ```
 
 `./images256` の想定構成:
@@ -190,6 +190,17 @@ PYTHONPATH=src python3 -m apk2img_ml train-eval-mrun \
   --in-ch 3 \
   --resize 224,224
 ```
+
+### 7. 結果集約ディレクトリ
+
+実行結果は `results/` にまとめます。
+
+- `results/train_eval_mrun/`: CNN の学習・評価ログ
+- `results/doc2vec/`: Doc2Vec 学習・推論の結果
+- `results/images/`: ベクトル画像化後の確認用出力
+- `results/notebooks/`: 実行結果の集計・可視化ノートブック
+
+`train-eval-mrun` の結果を集約する場合は、`--log-dir ./results/train_eval_mrun` を指定してください。
 
 ## 注意点
 

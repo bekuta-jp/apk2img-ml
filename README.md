@@ -81,7 +81,7 @@ python -m apk2img_ml train-eval-mrun \
   --resize 256,256 \
   --seed 3407 \
   --runs 3 \
-  --log-dir ./logs
+  --log-dir ./results/train_eval_mrun
 ```
 
 `train-eval-mrun` は次を行います。
@@ -100,4 +100,5 @@ python -m apk2img_ml train-eval-mrun \
 - baksmali / apktool / sdhash は外部ツールとして別途インストールが必要です。
 - 依存関係と導入手順（`pip` / 外部ツール / `conda`）は `docs/setup.md` を参照してください。
 - `train_eval_mrun` の移植内容は `docs/current_changes.md` を参照してください。
+- 実行結果の集約先は `results/README.md` を参照してください。
 - `sdhash` は通常版では最近の環境で問題が出るため、`legacy` 用途では [bekuta-jp/sdhash_for_ubuntu24.04](https://github.com/bekuta-jp/sdhash_for_ubuntu24.04) の利用を推奨します。
