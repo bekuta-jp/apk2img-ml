@@ -67,7 +67,7 @@ DocVec TSV をグレースケール画像へ変換します。
 主オプション:
 
 - `--data-root`
-- `--model {tiny,alexnet,vgg16,resnet50,densenet,mobilenet}`
+- `--model {tiny,alexnet,vgg16,resnet18,resnet34,resnet50,resnet101,resnet152,densenet,densenet121,mobilenet,mobilenet_v2,efficientnet_b0-b7,efficientnet_v2_s,efficientnet_v2_m,efficientnet_v2_l}`
 - `--epochs`, `--batch`, `--workers`
 - `--in-ch`
 - `--resize`

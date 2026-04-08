@@ -32,6 +32,11 @@ torch.backends.cuda.matmul.allow_tf32 = False
 torch.backends.cudnn.allow_tf32 = False
 
 VERBOSE_EPOCH = False
+MODEL_HELP = (
+    "tiny|alexnet|vgg16|resnet18|resnet34|resnet50|resnet101|resnet152|"
+    "densenet|densenet121|mobilenet|mobilenet_v2|efficientnet_b0-b7|"
+    "efficientnet_v2_s|efficientnet_v2_m|efficientnet_v2_l"
+)
 
 
 @dataclass(frozen=True)
@@ -484,7 +489,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--model",
         default="resnet50",
-        help="tiny|alexnet|vgg16|resnet50|densenet|mobilenet",
+        help=MODEL_HELP,
     )
     parser.add_argument("--epochs", type=int, default=15)
     parser.add_argument("--batch", type=int, default=32)

@@ -92,6 +92,7 @@ python -m apk2img_ml train-eval-mrun \
 - `--workers 0` に対応
 - 任意チャネル数に対応
 - `tiny` は `256x256` 互換を保ったまま任意入力サイズに対応
+- `resnet18/34/50/101/152`, `efficientnet_b0-b7`, `efficientnet_v2_s/m/l` に対応
 
 ## 補足
 

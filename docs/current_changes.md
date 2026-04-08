@@ -28,7 +28,7 @@ CLI 追加:
 
 - `data_root/dev` を `8:2` で train/val に分割
 - `data_root/test` で最終評価
-- モデル選択: `tiny`, `alexnet`, `vgg16`, `resnet50`, `densenet`, `mobilenet`
+- モデル選択: `tiny`, `alexnet`, `vgg16`, `resnet18`, `resnet34`, `resnet50`, `resnet101`, `resnet152`, `densenet`, `densenet121`, `mobilenet`, `mobilenet_v2`, `efficientnet_b0`-`efficientnet_b7`, `efficientnet_v2_s`, `efficientnet_v2_m`, `efficientnet_v2_l`
 - ログ出力:
   - `train_log.json`
   - `lr_curves.png`
@@ -79,6 +79,28 @@ CLI 追加:
 
 - `256x256` 入力では従来と同じ形状を維持
 - それ以外の入力サイズでも全結合層へ接続可能
+
+### 6. ResNet / EfficientNet 系モデルを追加
+
+追加したモデル名:
+
+- `resnet18`
+- `resnet34`
+- `resnet101`
+- `resnet152`
+- `efficientnet_b0`
+- `efficientnet_b1`
+- `efficientnet_b2`
+- `efficientnet_b3`
+- `efficientnet_b4`
+- `efficientnet_b5`
+- `efficientnet_b6`
+- `efficientnet_b7`
+- `efficientnet_v2_s`
+- `efficientnet_v2_m`
+- `efficientnet_v2_l`
+
+既存互換として `resnet50`, `densenet`, `mobilenet` も引き続き使えます。`densenet121` と `mobilenet_v2` も明示名として使えます。
 
 ## 実行に必要なコマンド
 
@@ -157,6 +179,16 @@ PYTHONPATH=src python3 -m apk2img_ml train-eval-mrun \
   --model tiny \
   --in-ch 5 \
   --resize 320,256
+```
+
+### 6. EfficientNet を使う例
+
+```bash
+PYTHONPATH=src python3 -m apk2img_ml train-eval-mrun \
+  --data-root ./images256 \
+  --model efficientnet_b0 \
+  --in-ch 3 \
+  --resize 224,224
 ```
 
 ## 注意点

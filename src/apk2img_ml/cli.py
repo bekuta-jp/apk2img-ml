@@ -7,6 +7,12 @@ from .extraction import ExtractionBackend, batch_extract
 from .extraction.config import TokenFilter
 from .extraction.pipeline import BackendOptions
 
+CNN_MODEL_HELP = (
+    "tiny|alexnet|vgg16|resnet18|resnet34|resnet50|resnet101|resnet152|"
+    "densenet|densenet121|mobilenet|mobilenet_v2|efficientnet_b0-b7|"
+    "efficientnet_v2_s|efficientnet_v2_m|efficientnet_v2_l"
+)
+
 
 def _non_negative_int(value: str) -> int:
     parsed = int(value)
@@ -97,7 +103,7 @@ def _add_train_eval_mrun_parser(subparsers: argparse._SubParsersAction) -> None:
     parser.add_argument(
         "--model",
         default="resnet50",
-        help="tiny|alexnet|vgg16|resnet50|densenet|mobilenet",
+        help=CNN_MODEL_HELP,
     )
     parser.add_argument("--epochs", type=int, default=15)
     parser.add_argument("--batch", type=int, default=32)
