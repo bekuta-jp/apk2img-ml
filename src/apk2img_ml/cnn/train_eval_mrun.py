@@ -8,6 +8,7 @@ import random
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
+import sys
 from typing import Any
 
 import matplotlib.pyplot as plt
@@ -19,7 +20,11 @@ from torch.utils.data import DataLoader, random_split
 from torchvision.datasets import ImageFolder
 from tqdm.auto import tqdm
 
-from .models import get_model
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from apk2img_ml.cnn.models import get_model
+else:
+    from .models import get_model
 
 try:  # pragma: no cover
     import japanize_matplotlib  # noqa: F401
