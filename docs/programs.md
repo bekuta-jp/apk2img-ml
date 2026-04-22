@@ -69,16 +69,19 @@ DocVec TSV をグレースケール画像へ変換します。
 - `--data-root`
 - `--model {tiny,alexnet,vgg16,resnet18,resnet34,resnet50,resnet101,resnet152,densenet,densenet121,mobilenet,mobilenet_v2,efficientnet_b0-b7,efficientnet_v2_s,efficientnet_v2_m,efficientnet_v2_l}`
 - `--epochs`, `--batch`, `--workers`
+- `--lr`, `--optimizer {adam,adamw,sgd}`, `--weight-decay`
 - `--in-ch`
 - `--resize`
 - `--seed`, `--runs`
 - `--log-dir`
+- `--early-stopping-patience`, `--early-stopping-min-delta`, `--no-restore-best`
 
 挙動:
 
 - `dev/` を `8:2` で train/val に分割
 - `test/` で最終評価
 - `train_log.json`, `lr_curves.png`, `loss_curves.png`, `val_acc_curves.png` を保存
+- `--early-stopping-patience > 0` の場合は validation accuracy を監視して停止し、既定では best epoch の重みに戻して `test/` 評価
 
 互換性と拡張:
 
@@ -86,6 +89,24 @@ DocVec TSV をグレースケール画像へ変換します。
 - `--workers 0` を有効化
 - 任意チャネル数に対応
 - `tiny` は `256x256` 互換を保ちながら任意入力サイズに対応
+
+### `tune-cnn`
+
+Optuna を使って CNN のハイパラを自動調整します。目的関数は `dev/` の train/val 分割における平均 best validation accuracy です。探索後は既定で最良 trial の設定を `test/` で評価します。
+
+主オプション:
+
+- `--data-root`
+- `--trials`, `--epochs`, `--runs`
+- `--models`
+- `--batch-candidates`
+- `--optimizer-candidates`
+- `--lr-low`, `--lr-high`
+- `--weight-decay-candidates`
+- `--early-stopping-patience`, `--early-stopping-min-delta`
+- `--pruner-startup-trials`, `--pruner-warmup-epochs`
+- `--evaluate-best` / `--no-evaluate-best`
+- `--study-name`, `--storage`
 
 ## モジュール構成
 

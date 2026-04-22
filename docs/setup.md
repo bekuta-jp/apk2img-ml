@@ -15,6 +15,7 @@
 CNN 関連を使う場合のみ追加:
 
 - `matplotlib>=3.8`
+- `optuna>=3.6`
 - `scikit-learn>=1.3`
 - `torch>=2.0`
 - `torchvision>=0.15`

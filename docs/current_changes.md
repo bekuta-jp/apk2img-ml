@@ -140,6 +140,9 @@ PYTHONPATH=src python3 -m apk2img_ml train-eval-mrun \
   --model tiny \
   --epochs 15 \
   --batch 32 \
+  --lr 1e-4 \
+  --optimizer adam \
+  --early-stopping-patience 3 \
   --workers 4 \
   --in-ch 1 \
   --resize 256,256 \
@@ -191,11 +194,28 @@ PYTHONPATH=src python3 -m apk2img_ml train-eval-mrun \
   --resize 224,224
 ```
 
-### 7. 結果集約ディレクトリ
+### 7. Optuna で CNN ハイパラを探索する例
+
+```bash
+PYTHONPATH=src python3 -m apk2img_ml tune-cnn \
+  --data-root ./images256 \
+  --trials 20 \
+  --epochs 15 \
+  --models resnet18,resnet50,mobilenet_v2 \
+  --batch-candidates 16,32,64 \
+  --optimizer-candidates adam,adamw \
+  --early-stopping-patience 3 \
+  --log-dir ./results/optuna_cnn
+```
+
+`tune-cnn` は Optuna/TPE と MedianPruner を使い、`dev/` の train/val 分割で平均 best validation accuracy を最大化します。探索後は既定で最良 trial の設定を `test/` で評価します。
+
+### 8. 結果集約ディレクトリ
 
 実行結果は `results/` にまとめます。
 
 - `results/train_eval_mrun/`: CNN の学習・評価ログ
+- `results/optuna_cnn/`: CNN ハイパラ探索ログ
 - `results/doc2vec/`: Doc2Vec 学習・推論の結果
 - `results/images/`: ベクトル画像化後の確認用出力
 - `results/notebooks/`: 実行結果の集計・可視化ノートブック

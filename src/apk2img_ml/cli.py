@@ -12,6 +12,7 @@ CNN_MODEL_HELP = (
     "densenet|densenet121|mobilenet|mobilenet_v2|efficientnet_b0-b7|"
     "efficientnet_v2_s|efficientnet_v2_m|efficientnet_v2_l"
 )
+CNN_OPTIMIZERS = ("adam", "adamw", "sgd")
 
 
 def _non_negative_int(value: str) -> int:
@@ -26,6 +27,45 @@ def _positive_int(value: str) -> int:
     if parsed <= 0:
         raise argparse.ArgumentTypeError(f"expected a positive integer, got: {value}")
     return parsed
+
+
+def _non_negative_float(value: str) -> float:
+    parsed = float(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError(f"expected a non-negative float, got: {value}")
+    return parsed
+
+
+def _positive_float(value: str) -> float:
+    parsed = float(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError(f"expected a positive float, got: {value}")
+    return parsed
+
+
+def _csv_strings(value: str) -> tuple[str, ...]:
+    items = tuple(item.strip() for item in value.split(",") if item.strip())
+    if not items:
+        raise argparse.ArgumentTypeError("expected at least one comma-separated value")
+    return items
+
+
+def _csv_positive_ints(value: str) -> tuple[int, ...]:
+    items = tuple(int(item.strip()) for item in value.split(",") if item.strip())
+    if not items:
+        raise argparse.ArgumentTypeError("expected at least one comma-separated integer")
+    if any(item <= 0 for item in items):
+        raise argparse.ArgumentTypeError(f"expected positive integers, got: {value}")
+    return items
+
+
+def _csv_non_negative_floats(value: str) -> tuple[float, ...]:
+    items = tuple(float(item.strip()) for item in value.split(",") if item.strip())
+    if not items:
+        raise argparse.ArgumentTypeError("expected at least one comma-separated float")
+    if any(item < 0 for item in items):
+        raise argparse.ArgumentTypeError(f"expected non-negative floats, got: {value}")
+    return items
 
 
 def _add_extract_parser(subparsers: argparse._SubParsersAction) -> None:
@@ -107,13 +147,56 @@ def _add_train_eval_mrun_parser(subparsers: argparse._SubParsersAction) -> None:
     )
     parser.add_argument("--epochs", type=int, default=15)
     parser.add_argument("--batch", type=int, default=32)
+    parser.add_argument("--lr", type=_positive_float, default=1e-4)
+    parser.add_argument("--optimizer", choices=CNN_OPTIMIZERS, default="adam")
+    parser.add_argument("--weight-decay", type=_non_negative_float, default=0.0)
     parser.add_argument("--workers", type=_non_negative_int, default=4)
     parser.add_argument("--in-ch", type=_positive_int, default=1)
     parser.add_argument("--resize", type=str, default="256,256")
     parser.add_argument("--seed", type=int, default=3407)
     parser.add_argument("--runs", type=int, default=1)
     parser.add_argument("--log-dir", type=Path, default=Path("logs"))
+    parser.add_argument("--early-stopping-patience", type=_non_negative_int, default=0)
+    parser.add_argument("--early-stopping-min-delta", type=_non_negative_float, default=0.0)
+    parser.add_argument("--restore-best", action=argparse.BooleanOptionalAction, default=True)
     parser.set_defaults(handler=_handle_train_eval_mrun)
+
+
+def _add_tune_cnn_parser(subparsers: argparse._SubParsersAction) -> None:
+    parser = subparsers.add_parser(
+        "tune-cnn",
+        help="Tune CNN hyperparameters with Optuna on the validation split",
+    )
+    parser.add_argument("--data-root", type=Path, required=True)
+    parser.add_argument("--trials", type=_positive_int, default=20)
+    parser.add_argument("--epochs", type=_positive_int, default=15)
+    parser.add_argument("--workers", type=_non_negative_int, default=4)
+    parser.add_argument("--in-ch", type=_positive_int, default=1)
+    parser.add_argument("--resize", type=str, default="256,256")
+    parser.add_argument("--seed", type=int, default=3407)
+    parser.add_argument("--runs", type=_positive_int, default=1)
+    parser.add_argument("--log-dir", type=Path, default=Path("logs/optuna_cnn"))
+    parser.add_argument("--study-name", type=str)
+    parser.add_argument("--storage", type=str)
+    parser.add_argument("--timeout", type=_positive_int)
+    parser.add_argument("--n-jobs", type=_positive_int, default=1)
+    parser.add_argument("--models", type=_csv_strings, default=("resnet18", "resnet50", "mobilenet_v2"))
+    parser.add_argument("--batch-candidates", type=_csv_positive_ints, default=(16, 32, 64))
+    parser.add_argument("--optimizer-candidates", type=_csv_strings, default=("adam", "adamw"))
+    parser.add_argument("--lr-low", type=_positive_float, default=1e-5)
+    parser.add_argument("--lr-high", type=_positive_float, default=1e-3)
+    parser.add_argument(
+        "--weight-decay-candidates",
+        type=_csv_non_negative_floats,
+        default=(0.0, 1e-6, 1e-5, 1e-4),
+    )
+    parser.add_argument("--early-stopping-patience", type=_non_negative_int, default=3)
+    parser.add_argument("--early-stopping-min-delta", type=_non_negative_float, default=0.0)
+    parser.add_argument("--restore-best", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--pruner-startup-trials", type=_non_negative_int, default=5)
+    parser.add_argument("--pruner-warmup-epochs", type=_non_negative_int, default=2)
+    parser.add_argument("--evaluate-best", action=argparse.BooleanOptionalAction, default=True)
+    parser.set_defaults(handler=_handle_tune_cnn)
 
 
 def _handle_extract(args: argparse.Namespace) -> int:
@@ -247,15 +330,56 @@ def _handle_train_eval_mrun(args: argparse.Namespace) -> int:
         model=args.model,
         epochs=args.epochs,
         batch=args.batch,
+        lr=args.lr,
+        optimizer=args.optimizer,
+        weight_decay=args.weight_decay,
         workers=args.workers,
         in_ch=args.in_ch,
         resize=args.resize,
         seed=args.seed,
         runs=args.runs,
         log_dir=args.log_dir,
+        early_stopping_patience=args.early_stopping_patience,
+        early_stopping_min_delta=args.early_stopping_min_delta,
+        restore_best=args.restore_best,
     )
     result = run_train_eval_mrun(config)
     print(f"Saved logs under: {result['run_dir']}")
+    return 0
+
+
+def _handle_tune_cnn(args: argparse.Namespace) -> int:
+    from .cnn.train_eval_mrun import TuneConfig, run_tune_cnn
+
+    config = TuneConfig(
+        data_root=args.data_root,
+        trials=args.trials,
+        epochs=args.epochs,
+        workers=args.workers,
+        in_ch=args.in_ch,
+        resize=args.resize,
+        seed=args.seed,
+        runs=args.runs,
+        log_dir=args.log_dir,
+        study_name=args.study_name,
+        storage=args.storage,
+        timeout=args.timeout,
+        n_jobs=args.n_jobs,
+        model_candidates=args.models,
+        batch_candidates=args.batch_candidates,
+        optimizer_candidates=args.optimizer_candidates,
+        lr_low=args.lr_low,
+        lr_high=args.lr_high,
+        weight_decay_candidates=args.weight_decay_candidates,
+        early_stopping_patience=args.early_stopping_patience,
+        early_stopping_min_delta=args.early_stopping_min_delta,
+        restore_best=args.restore_best,
+        pruner_startup_trials=args.pruner_startup_trials,
+        pruner_warmup_epochs=args.pruner_warmup_epochs,
+        evaluate_best=args.evaluate_best,
+    )
+    result = run_tune_cnn(config)
+    print(f"Saved Optuna logs under: {result['tune_dir']}")
     return 0
 
 
@@ -268,6 +392,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_infer_doc2vec_parser(subparsers)
     _add_docvec_to_png_parser(subparsers)
     _add_train_eval_mrun_parser(subparsers)
+    _add_tune_cnn_parser(subparsers)
 
     return parser
 

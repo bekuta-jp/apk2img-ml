@@ -76,6 +76,9 @@ python -m apk2img_ml train-eval-mrun \
   --model tiny \
   --epochs 15 \
   --batch 32 \
+  --lr 1e-4 \
+  --optimizer adam \
+  --early-stopping-patience 3 \
   --workers 4 \
   --in-ch 1 \
   --resize 256,256 \
@@ -89,10 +92,28 @@ python -m apk2img_ml train-eval-mrun \
 - `dev/` を train/val に `8:2` 分割
 - `test/` で最終評価
 - `train_log.json` と各種学習曲線を保存
+- `--lr`, `--optimizer`, `--weight-decay` に対応
+- `--early-stopping-patience` による早期停止と best epoch 復元に対応
 - `--workers 0` に対応
 - 任意チャネル数に対応
 - `tiny` は `256x256` 互換を保ったまま任意入力サイズに対応
 - `resnet18/34/50/101/152`, `efficientnet_b0-b7`, `efficientnet_v2_s/m/l` に対応
+
+### 6) CNN ハイパラ自動調整
+
+```bash
+python -m apk2img_ml tune-cnn \
+  --data-root ./images256 \
+  --trials 20 \
+  --epochs 15 \
+  --models resnet18,resnet50,mobilenet_v2 \
+  --batch-candidates 16,32,64 \
+  --optimizer-candidates adam,adamw \
+  --early-stopping-patience 3 \
+  --log-dir ./results/optuna_cnn
+```
+
+`tune-cnn` は Optuna/TPE と pruning を使い、`dev/` の train/val 分割に対する平均 best validation accuracy を最大化します。探索後は既定で最良 trial の設定を `test/` で評価します。
 
 ## 補足
 

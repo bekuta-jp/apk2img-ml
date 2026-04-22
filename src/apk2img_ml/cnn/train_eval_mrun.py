@@ -42,6 +42,11 @@ MODEL_HELP = (
     "densenet|densenet121|mobilenet|mobilenet_v2|efficientnet_b0-b7|"
     "efficientnet_v2_s|efficientnet_v2_m|efficientnet_v2_l"
 )
+SUPPORTED_OPTIMIZERS = ("adam", "adamw", "sgd")
+DEFAULT_TUNE_MODELS = ("resnet18", "resnet50", "mobilenet_v2")
+DEFAULT_TUNE_BATCHES = (16, 32, 64)
+DEFAULT_TUNE_OPTIMIZERS = ("adam", "adamw")
+DEFAULT_TUNE_WEIGHT_DECAYS = (0.0, 1e-6, 1e-5, 1e-4)
 
 
 @dataclass(frozen=True)
@@ -50,12 +55,47 @@ class TrainEvalConfig:
     model: str = "resnet50"
     epochs: int = 15
     batch: int = 32
+    lr: float = 1e-4
+    optimizer: str = "adam"
+    weight_decay: float = 0.0
     workers: int = 4
     in_ch: int = 1
     resize: str = "256,256"
     seed: int = 3407
     runs: int = 1
     log_dir: Path = Path("logs")
+    early_stopping_patience: int = 0
+    early_stopping_min_delta: float = 0.0
+    restore_best: bool = True
+
+
+@dataclass(frozen=True)
+class TuneConfig:
+    data_root: Path
+    trials: int = 20
+    epochs: int = 15
+    workers: int = 4
+    in_ch: int = 1
+    resize: str = "256,256"
+    seed: int = 3407
+    runs: int = 1
+    log_dir: Path = Path("logs/optuna_cnn")
+    study_name: str | None = None
+    storage: str | None = None
+    timeout: int | None = None
+    n_jobs: int = 1
+    model_candidates: tuple[str, ...] = DEFAULT_TUNE_MODELS
+    batch_candidates: tuple[int, ...] = DEFAULT_TUNE_BATCHES
+    optimizer_candidates: tuple[str, ...] = DEFAULT_TUNE_OPTIMIZERS
+    lr_low: float = 1e-5
+    lr_high: float = 1e-3
+    weight_decay_candidates: tuple[float, ...] = DEFAULT_TUNE_WEIGHT_DECAYS
+    early_stopping_patience: int = 3
+    early_stopping_min_delta: float = 0.0
+    restore_best: bool = True
+    pruner_startup_trials: int = 5
+    pruner_warmup_epochs: int = 2
+    evaluate_best: bool = True
 
 
 def _non_negative_int(value: str) -> int:
@@ -69,6 +109,20 @@ def _positive_int(value: str) -> int:
     parsed = int(value)
     if parsed <= 0:
         raise argparse.ArgumentTypeError(f"expected a positive integer, got: {value}")
+    return parsed
+
+
+def _non_negative_float(value: str) -> float:
+    parsed = float(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError(f"expected a non-negative float, got: {value}")
+    return parsed
+
+
+def _positive_float(value: str) -> float:
+    parsed = float(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError(f"expected a positive float, got: {value}")
     return parsed
 
 
@@ -148,29 +202,32 @@ def _worker_init_fn(base_seed: int):
     return init_worker
 
 
-def _build_dataloaders(
-    config: TrainEvalConfig,
-    device: str,
-    run_seed: int,
-    transform: T.Compose,
-) -> tuple[DataLoader, DataLoader, DataLoader, ImageFolder]:
-    generator = torch.Generator()
-    generator.manual_seed(run_seed)
-
-    dev_dataset = ImageFolder(str(config.data_root / "dev"), transform=transform)
-    test_dataset = ImageFolder(str(config.data_root / "test"), transform=transform)
-
-    train_len = int(len(dev_dataset) * 0.8)
-    val_len = len(dev_dataset) - train_len
-    train_dataset, val_dataset = random_split(dev_dataset, [train_len, val_len], generator=generator)
-
+def _loader_kwargs(config: TrainEvalConfig, device: str, run_seed: int) -> dict[str, Any]:
     persistent_workers = config.workers > 0
-    loader_kwargs = {
+    return {
         "num_workers": config.workers,
         "pin_memory": device == "cuda",
         "worker_init_fn": _worker_init_fn(run_seed) if config.workers > 0 else None,
         "persistent_workers": persistent_workers,
     }
+
+
+def _build_train_val_dataloaders(
+    config: TrainEvalConfig,
+    device: str,
+    run_seed: int,
+    transform: T.Compose,
+) -> tuple[DataLoader, DataLoader]:
+    generator = torch.Generator()
+    generator.manual_seed(run_seed)
+
+    dev_dataset = ImageFolder(str(config.data_root / "dev"), transform=transform)
+
+    train_len = int(len(dev_dataset) * 0.8)
+    val_len = len(dev_dataset) - train_len
+    train_dataset, val_dataset = random_split(dev_dataset, [train_len, val_len], generator=generator)
+
+    loader_kwargs = _loader_kwargs(config, device, run_seed)
 
     train_loader = DataLoader(
         train_dataset,
@@ -185,6 +242,18 @@ def _build_dataloaders(
         shuffle=False,
         **loader_kwargs,
     )
+
+    return train_loader, val_loader
+
+
+def _build_test_dataloader(
+    config: TrainEvalConfig,
+    device: str,
+    run_seed: int,
+    transform: T.Compose,
+) -> tuple[DataLoader, ImageFolder]:
+    test_dataset = ImageFolder(str(config.data_root / "test"), transform=transform)
+    loader_kwargs = _loader_kwargs(config, device, run_seed)
     test_loader = DataLoader(
         test_dataset,
         batch_size=config.batch,
@@ -192,6 +261,17 @@ def _build_dataloaders(
         **loader_kwargs,
     )
 
+    return test_loader, test_dataset
+
+
+def _build_dataloaders(
+    config: TrainEvalConfig,
+    device: str,
+    run_seed: int,
+    transform: T.Compose,
+) -> tuple[DataLoader, DataLoader, DataLoader, ImageFolder]:
+    train_loader, val_loader = _build_train_val_dataloaders(config, device, run_seed, transform)
+    test_loader, test_dataset = _build_test_dataloader(config, device, run_seed, transform)
     return train_loader, val_loader, test_loader, test_dataset
 
 
@@ -208,11 +288,189 @@ def _plot_histories(histories: list[list[float]], ylabel: str, title: str, out_p
     plt.close()
 
 
-def run_train_eval_mrun(config: TrainEvalConfig) -> dict[str, Any]:
+def _validate_train_eval_config(config: TrainEvalConfig) -> None:
     if config.workers < 0:
         raise ValueError(f"workers must be non-negative: {config.workers}")
     if config.in_ch <= 0:
         raise ValueError(f"in_ch must be positive: {config.in_ch}")
+    if config.epochs <= 0:
+        raise ValueError(f"epochs must be positive: {config.epochs}")
+    if config.batch <= 0:
+        raise ValueError(f"batch must be positive: {config.batch}")
+    if config.lr <= 0:
+        raise ValueError(f"lr must be positive: {config.lr}")
+    if config.weight_decay < 0:
+        raise ValueError(f"weight_decay must be non-negative: {config.weight_decay}")
+    if config.early_stopping_patience < 0:
+        raise ValueError(
+            f"early_stopping_patience must be non-negative: {config.early_stopping_patience}"
+        )
+    if config.early_stopping_min_delta < 0:
+        raise ValueError(
+            f"early_stopping_min_delta must be non-negative: {config.early_stopping_min_delta}"
+        )
+    if config.runs <= 0:
+        raise ValueError(f"runs must be positive: {config.runs}")
+    if config.optimizer.lower() not in SUPPORTED_OPTIMIZERS:
+        raise ValueError(
+            f"optimizer must be one of {', '.join(SUPPORTED_OPTIMIZERS)}: {config.optimizer}"
+        )
+
+
+def _build_optimizer(
+    name: str,
+    parameters: Any,
+    *,
+    lr: float,
+    weight_decay: float,
+) -> torch.optim.Optimizer:
+    optimizer_name = name.lower()
+    if optimizer_name == "adam":
+        return torch.optim.Adam(parameters, lr=lr, weight_decay=weight_decay)
+    if optimizer_name == "adamw":
+        return torch.optim.AdamW(parameters, lr=lr, weight_decay=weight_decay)
+    if optimizer_name == "sgd":
+        return torch.optim.SGD(
+            parameters,
+            lr=lr,
+            weight_decay=weight_decay,
+            momentum=0.9,
+            nesterov=True,
+        )
+    raise ValueError(f"unsupported optimizer: {name}")
+
+
+def _report_trial(trial: Any, value: float, step: int) -> None:
+    trial.report(value, step=step)
+    if trial.should_prune():
+        try:
+            import optuna
+        except ImportError as exc:  # pragma: no cover
+            raise RuntimeError("Optuna is required for trial pruning.") from exc
+        raise optuna.TrialPruned(f"pruned at step {step} with val_acc={value:.4f}")
+
+
+def _evaluate_accuracy(model: torch.nn.Module, loader: DataLoader, device: str) -> float:
+    model.eval()
+    correct = 0
+    with torch.no_grad():
+        for inputs, targets in loader:
+            predictions = model(inputs.to(device, non_blocking=True)).argmax(1).cpu()
+            correct += (predictions == targets).sum().item()
+    return correct / len(loader.dataset)
+
+
+def _snapshot_state_dict(model: torch.nn.Module) -> dict[str, torch.Tensor]:
+    return {key: value.detach().cpu().clone() for key, value in model.state_dict().items()}
+
+
+def _train_model(
+    config: TrainEvalConfig,
+    model: torch.nn.Module,
+    train_loader: DataLoader,
+    val_loader: DataLoader,
+    device: str,
+    *,
+    run_idx: int,
+    trial: Any | None = None,
+    trial_step_offset: int = 0,
+) -> dict[str, Any]:
+    optimizer = _build_optimizer(
+        config.optimizer,
+        model.parameters(),
+        lr=config.lr,
+        weight_decay=config.weight_decay,
+    )
+    criterion = torch.nn.CrossEntropyLoss()
+
+    epoch_losses: list[float] = []
+    epoch_valacc: list[float] = []
+    epoch_lrs: list[float] = []
+    best_val_acc = float("-inf")
+    best_epoch = 0
+    best_state: dict[str, torch.Tensor] | None = None
+    epochs_without_improvement = 0
+    early_stopped = False
+    stopped_epoch: int | None = None
+
+    for epoch in range(1, config.epochs + 1):
+        model.train()
+        running_loss = 0.0
+        for inputs, targets in tqdm(
+            train_loader,
+            desc=f"Run {run_idx + 1}/{config.runs} Epoch {epoch:02d} [train]",
+            leave=False,
+        ):
+            inputs = inputs.to(device, non_blocking=True)
+            targets = targets.to(device, non_blocking=True)
+            optimizer.zero_grad()
+            loss = criterion(model(inputs), targets)
+            loss.backward()
+            optimizer.step()
+            running_loss += loss.item() * targets.size(0)
+
+        epoch_loss = running_loss / len(train_loader.dataset)
+        if VERBOSE_EPOCH:
+            print(f"  train loss = {epoch_loss:.4f}")
+
+        val_acc = _evaluate_accuracy(model, val_loader, device)
+        if VERBOSE_EPOCH:
+            print(f"  val acc   = {val_acc:.3f}")
+
+        epoch_lrs.append(float(optimizer.param_groups[0]["lr"]))
+        epoch_losses.append(float(epoch_loss))
+        epoch_valacc.append(float(val_acc))
+
+        if trial is not None:
+            _report_trial(trial, float(val_acc), trial_step_offset + epoch)
+
+        improved = float(val_acc) > best_val_acc + config.early_stopping_min_delta
+        if improved:
+            best_val_acc = float(val_acc)
+            best_epoch = epoch
+            epochs_without_improvement = 0
+            if config.restore_best:
+                best_state = _snapshot_state_dict(model)
+        else:
+            epochs_without_improvement += 1
+
+        if (
+            config.early_stopping_patience > 0
+            and epochs_without_improvement >= config.early_stopping_patience
+        ):
+            early_stopped = True
+            stopped_epoch = epoch
+            break
+
+    if config.restore_best and best_state is not None:
+        model.load_state_dict(best_state)
+
+    return {
+        "train_loss_per_epoch": epoch_losses,
+        "val_acc_per_epoch": epoch_valacc,
+        "lr_per_epoch": epoch_lrs,
+        "best_val_acc": best_val_acc if best_val_acc != float("-inf") else 0.0,
+        "best_epoch": best_epoch,
+        "epochs_completed": len(epoch_losses),
+        "early_stopped": early_stopped,
+        "stopped_epoch": stopped_epoch,
+    }
+
+
+def _predict_labels(model: torch.nn.Module, loader: DataLoader, device: str) -> tuple[list[int], list[int]]:
+    model.eval()
+    y_true: list[int] = []
+    y_pred: list[int] = []
+    with torch.no_grad():
+        for inputs, targets in loader:
+            predictions = model(inputs.to(device, non_blocking=True)).argmax(1).cpu()
+            y_true.extend(targets.tolist())
+            y_pred.extend(predictions.tolist())
+    return y_true, y_pred
+
+
+def run_train_eval_mrun(config: TrainEvalConfig) -> dict[str, Any]:
+    _validate_train_eval_config(config)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     resize_hw = _parse_resize_arg(config.resize)
@@ -262,57 +520,21 @@ def run_train_eval_mrun(config: TrainEvalConfig) -> dict[str, Any]:
             pretrained=True,
             in_ch=config.in_ch,
         ).to(device)
-        optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
-        criterion = torch.nn.CrossEntropyLoss()
+        train_result = _train_model(
+            config,
+            model,
+            train_loader,
+            val_loader,
+            device,
+            run_idx=run_idx,
+        )
 
-        epoch_losses: list[float] = []
-        epoch_valacc: list[float] = []
-        epoch_lrs: list[float] = []
-        best_val_acc = 0.0
+        epoch_losses = train_result["train_loss_per_epoch"]
+        epoch_valacc = train_result["val_acc_per_epoch"]
+        epoch_lrs = train_result["lr_per_epoch"]
+        best_val_acc = float(train_result["best_val_acc"])
 
-        for epoch in range(1, config.epochs + 1):
-            model.train()
-            running_loss = 0.0
-            for inputs, targets in tqdm(
-                train_loader,
-                desc=f"Run {run_idx + 1}/{config.runs} Epoch {epoch:02d} [train]",
-                leave=False,
-            ):
-                inputs = inputs.to(device, non_blocking=True)
-                targets = targets.to(device, non_blocking=True)
-                optimizer.zero_grad()
-                loss = criterion(model(inputs), targets)
-                loss.backward()
-                optimizer.step()
-                running_loss += loss.item() * targets.size(0)
-
-            epoch_loss = running_loss / len(train_loader.dataset)
-            if VERBOSE_EPOCH:
-                print(f"  train loss = {epoch_loss:.4f}")
-
-            model.eval()
-            correct = 0
-            with torch.no_grad():
-                for inputs, targets in val_loader:
-                    predictions = model(inputs.to(device, non_blocking=True)).argmax(1).cpu()
-                    correct += (predictions == targets).sum().item()
-            val_acc = correct / len(val_loader.dataset)
-            if VERBOSE_EPOCH:
-                print(f"  val acc   = {val_acc:.3f}")
-
-            epoch_lrs.append(float(optimizer.param_groups[0]["lr"]))
-            epoch_losses.append(float(epoch_loss))
-            epoch_valacc.append(float(val_acc))
-            best_val_acc = max(best_val_acc, float(val_acc))
-
-        model.eval()
-        y_true: list[int] = []
-        y_pred: list[int] = []
-        with torch.no_grad():
-            for inputs, targets in test_loader:
-                predictions = model(inputs.to(device, non_blocking=True)).argmax(1).cpu()
-                y_true.extend(targets.tolist())
-                y_pred.extend(predictions.tolist())
+        y_true, y_pred = _predict_labels(model, test_loader, device)
 
         test_acc = float(accuracy_score(y_true, y_pred))
         class_to_idx = getattr(test_dataset, "class_to_idx", {})
@@ -343,6 +565,7 @@ def run_train_eval_mrun(config: TrainEvalConfig) -> dict[str, Any]:
 
         print(
             f"[Run {run_idx + 1}/{config.runs}] seed={run_seed}  best_val_acc={best_val_acc:.3f}  "
+            f"best_epoch={train_result['best_epoch']}  "
             f"test_acc={test_acc:.3f}  "
             f"F1(macro)={test_f1_macro:.3f}  F1(micro)={test_f1_micro:.3f}  "
             f"F1(weighted)={test_f1_weighted:.3f}  "
@@ -358,6 +581,10 @@ def run_train_eval_mrun(config: TrainEvalConfig) -> dict[str, Any]:
             "val_acc_per_epoch": epoch_valacc,
             "lr_per_epoch": epoch_lrs,
             "best_val_acc": best_val_acc,
+            "best_epoch": train_result["best_epoch"],
+            "epochs_completed": train_result["epochs_completed"],
+            "early_stopped": train_result["early_stopped"],
+            "stopped_epoch": train_result["stopped_epoch"],
             "test_acc": test_acc,
             "test_f1": {
                 "macro": test_f1_macro,
@@ -488,6 +715,288 @@ def run_train_eval_mrun(config: TrainEvalConfig) -> dict[str, Any]:
     }
 
 
+def _serializable_dataclass(config: TrainEvalConfig | TuneConfig) -> dict[str, Any]:
+    values = asdict(config)
+    for key, value in list(values.items()):
+        if isinstance(value, Path):
+            values[key] = str(value)
+        elif isinstance(value, tuple):
+            values[key] = list(value)
+    return values
+
+
+def _validate_tune_config(config: TuneConfig) -> None:
+    if config.trials <= 0:
+        raise ValueError(f"trials must be positive: {config.trials}")
+    if config.epochs <= 0:
+        raise ValueError(f"epochs must be positive: {config.epochs}")
+    if config.workers < 0:
+        raise ValueError(f"workers must be non-negative: {config.workers}")
+    if config.in_ch <= 0:
+        raise ValueError(f"in_ch must be positive: {config.in_ch}")
+    if config.runs <= 0:
+        raise ValueError(f"runs must be positive: {config.runs}")
+    if not config.model_candidates:
+        raise ValueError("model_candidates must not be empty")
+    if not config.batch_candidates:
+        raise ValueError("batch_candidates must not be empty")
+    if not config.optimizer_candidates:
+        raise ValueError("optimizer_candidates must not be empty")
+    if not config.weight_decay_candidates:
+        raise ValueError("weight_decay_candidates must not be empty")
+    if config.lr_low <= 0 or config.lr_high <= 0:
+        raise ValueError("lr bounds must be positive")
+    if config.lr_low > config.lr_high:
+        raise ValueError(f"lr_low must be <= lr_high: {config.lr_low} > {config.lr_high}")
+    if any(batch <= 0 for batch in config.batch_candidates):
+        raise ValueError(f"batch candidates must be positive: {config.batch_candidates}")
+    if any(weight_decay < 0 for weight_decay in config.weight_decay_candidates):
+        raise ValueError(
+            f"weight_decay candidates must be non-negative: {config.weight_decay_candidates}"
+        )
+    unknown_optimizers = [
+        optimizer for optimizer in config.optimizer_candidates if optimizer.lower() not in SUPPORTED_OPTIMIZERS
+    ]
+    if unknown_optimizers:
+        raise ValueError(
+            f"optimizer candidates must be in {', '.join(SUPPORTED_OPTIMIZERS)}: "
+            f"{unknown_optimizers}"
+        )
+    if config.early_stopping_patience < 0:
+        raise ValueError(
+            f"early_stopping_patience must be non-negative: {config.early_stopping_patience}"
+        )
+    if config.early_stopping_min_delta < 0:
+        raise ValueError(
+            f"early_stopping_min_delta must be non-negative: {config.early_stopping_min_delta}"
+        )
+    if config.pruner_startup_trials < 0:
+        raise ValueError(f"pruner_startup_trials must be non-negative: {config.pruner_startup_trials}")
+    if config.pruner_warmup_epochs < 0:
+        raise ValueError(f"pruner_warmup_epochs must be non-negative: {config.pruner_warmup_epochs}")
+
+
+def _import_optuna() -> Any:
+    try:
+        import optuna
+    except ImportError as exc:  # pragma: no cover
+        raise RuntimeError(
+            'Optuna is required for tune-cnn. Install the CNN extras, e.g. pip install -e ".[cnn]".'
+        ) from exc
+    return optuna
+
+
+def _run_validation_mrun(config: TrainEvalConfig, *, trial: Any | None = None) -> dict[str, Any]:
+    _validate_train_eval_config(config)
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    resize_hw = _parse_resize_arg(config.resize)
+
+    if resize_hw is None and config.batch > 1:
+        print(
+            "[WARN] --resize none and --batch>1 can fail when image sizes differ. "
+            "Use --batch 1 or normalize image sizes ahead of time."
+        )
+
+    transform = build_transform(config.in_ch, resize_hw)
+    all_runs: list[dict[str, Any]] = []
+    best_val_scores: list[float] = []
+
+    for run_idx in range(config.runs):
+        run_seed = config.seed + run_idx
+        set_seed(run_seed)
+
+        train_loader, val_loader = _build_train_val_dataloaders(config, device, run_seed, transform)
+
+        model = get_model(
+            config.model,
+            num_classes=2,
+            pretrained=True,
+            in_ch=config.in_ch,
+        ).to(device)
+        train_result = _train_model(
+            config,
+            model,
+            train_loader,
+            val_loader,
+            device,
+            run_idx=run_idx,
+            trial=trial,
+            trial_step_offset=run_idx * config.epochs,
+        )
+
+        best_val_acc = float(train_result["best_val_acc"])
+        best_val_scores.append(best_val_acc)
+        all_runs.append(
+            {
+                "run": run_idx + 1,
+                "seed": run_seed,
+                **train_result,
+            }
+        )
+
+    return {
+        "config": _serializable_dataclass(config),
+        "device": device,
+        "runs": all_runs,
+        "score": float(np.mean(best_val_scores)) if best_val_scores else 0.0,
+        "score_std": float(np.std(best_val_scores, ddof=0)) if best_val_scores else 0.0,
+    }
+
+
+def _suggest_train_eval_config(config: TuneConfig, trial: Any) -> TrainEvalConfig:
+    return TrainEvalConfig(
+        data_root=config.data_root,
+        model=trial.suggest_categorical("model", list(config.model_candidates)),
+        epochs=config.epochs,
+        batch=trial.suggest_categorical("batch", list(config.batch_candidates)),
+        lr=trial.suggest_float("lr", config.lr_low, config.lr_high, log=True),
+        optimizer=trial.suggest_categorical("optimizer", list(config.optimizer_candidates)),
+        weight_decay=trial.suggest_categorical(
+            "weight_decay",
+            list(config.weight_decay_candidates),
+        ),
+        workers=config.workers,
+        in_ch=config.in_ch,
+        resize=config.resize,
+        seed=config.seed,
+        runs=config.runs,
+        log_dir=config.log_dir,
+        early_stopping_patience=config.early_stopping_patience,
+        early_stopping_min_delta=config.early_stopping_min_delta,
+        restore_best=config.restore_best,
+    )
+
+
+def _train_eval_config_from_params(
+    config: TuneConfig,
+    params: dict[str, Any],
+    *,
+    log_dir: Path,
+) -> TrainEvalConfig:
+    return TrainEvalConfig(
+        data_root=config.data_root,
+        model=str(params["model"]),
+        epochs=config.epochs,
+        batch=int(params["batch"]),
+        lr=float(params["lr"]),
+        optimizer=str(params["optimizer"]),
+        weight_decay=float(params["weight_decay"]),
+        workers=config.workers,
+        in_ch=config.in_ch,
+        resize=config.resize,
+        seed=config.seed,
+        runs=config.runs,
+        log_dir=log_dir,
+        early_stopping_patience=config.early_stopping_patience,
+        early_stopping_min_delta=config.early_stopping_min_delta,
+        restore_best=config.restore_best,
+    )
+
+
+def _serialize_optuna_trial(trial: Any) -> dict[str, Any]:
+    return {
+        "number": trial.number,
+        "state": trial.state.name,
+        "value": trial.value,
+        "params": trial.params,
+        "user_attrs": trial.user_attrs,
+        "datetime_start": trial.datetime_start.isoformat() if trial.datetime_start else None,
+        "datetime_complete": trial.datetime_complete.isoformat() if trial.datetime_complete else None,
+    }
+
+
+def run_tune_cnn(config: TuneConfig) -> dict[str, Any]:
+    _validate_tune_config(config)
+    optuna = _import_optuna()
+
+    log_root = config.log_dir
+    log_root.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    tune_dir = log_root / timestamp
+    tune_dir.mkdir(parents=True, exist_ok=True)
+    log_json_path = tune_dir / "optuna_tuning_log.json"
+
+    sampler = optuna.samplers.TPESampler(seed=config.seed)
+    pruner = optuna.pruners.MedianPruner(
+        n_startup_trials=config.pruner_startup_trials,
+        n_warmup_steps=config.pruner_warmup_epochs,
+    )
+    study = optuna.create_study(
+        direction="maximize",
+        sampler=sampler,
+        pruner=pruner,
+        study_name=config.study_name,
+        storage=config.storage,
+        load_if_exists=config.storage is not None,
+    )
+
+    def objective(trial: Any) -> float:
+        train_config = _suggest_train_eval_config(config, trial)
+        trial.set_user_attr("train_config", _serializable_dataclass(train_config))
+        validation_result = _run_validation_mrun(train_config, trial=trial)
+        trial.set_user_attr("validation", validation_result)
+        return float(validation_result["score"])
+
+    study.optimize(
+        objective,
+        n_trials=config.trials,
+        timeout=config.timeout,
+        n_jobs=config.n_jobs,
+        show_progress_bar=True,
+    )
+
+    best_trial = None
+    try:
+        best_trial = study.best_trial
+    except ValueError:
+        best_trial = None
+
+    summary: dict[str, Any] = {
+        "timestamp": timestamp,
+        "args": _serializable_dataclass(config),
+        "direction": "maximize",
+        "objective": "mean best validation accuracy across runs",
+        "study_name": study.study_name,
+        "best_trial": _serialize_optuna_trial(best_trial) if best_trial is not None else None,
+        "trials": [_serialize_optuna_trial(trial) for trial in study.trials],
+    }
+    with log_json_path.open("w", encoding="utf-8") as handle:
+        json.dump(summary, handle, ensure_ascii=False, indent=2)
+
+    best_eval_result: dict[str, Any] | None = None
+    if best_trial is not None and config.evaluate_best:
+        best_config = _train_eval_config_from_params(
+            config,
+            best_trial.params,
+            log_dir=tune_dir / "best_eval",
+        )
+        best_eval_result = run_train_eval_mrun(best_config)
+
+    if best_eval_result is not None:
+        summary["best_eval"] = {
+            "run_dir": str(best_eval_result["run_dir"]),
+            "log_json_path": str(best_eval_result["log_json_path"]),
+            "summary": best_eval_result["summary"]["summary"],
+        }
+        with log_json_path.open("w", encoding="utf-8") as handle:
+            json.dump(summary, handle, ensure_ascii=False, indent=2)
+
+    if best_trial is not None:
+        print(
+            f"Best trial #{best_trial.number}: val_acc={best_trial.value:.4f}  "
+            f"params={best_trial.params}"
+        )
+
+    return {
+        "summary": summary,
+        "study": study,
+        "tune_dir": tune_dir,
+        "log_json_path": log_json_path,
+        "best_eval_result": best_eval_result,
+    }
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-root", required=True, type=Path, help="parent directory containing dev/ and test/")
@@ -498,6 +1007,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--epochs", type=int, default=15)
     parser.add_argument("--batch", type=int, default=32)
+    parser.add_argument("--lr", type=_positive_float, default=1e-4)
+    parser.add_argument("--optimizer", choices=SUPPORTED_OPTIMIZERS, default="adam")
+    parser.add_argument("--weight-decay", type=_non_negative_float, default=0.0)
     parser.add_argument("--workers", type=_non_negative_int, default=4)
     parser.add_argument("--in-ch", type=_positive_int, default=1, help="input channel count")
     parser.add_argument(
@@ -509,6 +1021,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=3407, help="random seed")
     parser.add_argument("--runs", type=int, default=1, help="number of repeated runs")
     parser.add_argument("--log-dir", type=Path, default=Path("logs"), help="directory for logs and plots")
+    parser.add_argument("--early-stopping-patience", type=_non_negative_int, default=0)
+    parser.add_argument("--early-stopping-min-delta", type=_non_negative_float, default=0.0)
+    parser.add_argument("--restore-best", action=argparse.BooleanOptionalAction, default=True)
     return parser
 
 
@@ -519,12 +1034,18 @@ def main(argv: list[str] | None = None) -> int:
         model=args.model,
         epochs=args.epochs,
         batch=args.batch,
+        lr=args.lr,
+        optimizer=args.optimizer,
+        weight_decay=args.weight_decay,
         workers=args.workers,
         in_ch=args.in_ch,
         resize=args.resize,
         seed=args.seed,
         runs=args.runs,
         log_dir=args.log_dir,
+        early_stopping_patience=args.early_stopping_patience,
+        early_stopping_min_delta=args.early_stopping_min_delta,
+        restore_best=args.restore_best,
     )
     result = run_train_eval_mrun(config)
     print(f"Saved logs under: {result['run_dir']}")

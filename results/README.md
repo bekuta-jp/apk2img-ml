@@ -12,6 +12,9 @@ PYTHONPATH=src python3 -m apk2img_ml train-eval-mrun \
   --model tiny \
   --epochs 15 \
   --batch 32 \
+  --lr 1e-4 \
+  --optimizer adam \
+  --early-stopping-patience 3 \
   --workers 4 \
   --in-ch 1 \
   --resize 256,256 \
@@ -27,9 +30,25 @@ PYTHONPATH=src python3 -m apk2img_ml train-eval-mrun \
 - `loss_curves.png`
 - `val_acc_curves.png`
 
+## CNN ハイパラ探索
+
+```bash
+PYTHONPATH=src python3 -m apk2img_ml tune-cnn \
+  --data-root ./images256 \
+  --trials 20 \
+  --epochs 15 \
+  --log-dir ./results/optuna_cnn
+```
+
+出力される主なファイル:
+
+- `optuna_tuning_log.json`
+- `best_eval/` 以下の最良 trial による学習・評価ログ
+
 ## 推奨配置
 
 - `results/train_eval_mrun/`: CNN の学習・評価ログ
+- `results/optuna_cnn/`: CNN ハイパラ探索ログ
 - `results/doc2vec/`: Doc2Vec 学習・推論の結果
 - `results/images/`: ベクトル画像化後の確認用出力
 - `results/notebooks/`: 実行結果の集計・可視化ノートブック
