@@ -29,6 +29,7 @@ CLI 追加:
 - `data_root/dev` を `8:2` で train/val に分割
 - `data_root/test` で最終評価
 - モデル選択: `tiny`, `alexnet`, `vgg16`, `resnet18`, `resnet34`, `resnet50`, `resnet101`, `resnet152`, `densenet`, `densenet121`, `mobilenet`, `mobilenet_v2`, `efficientnet_b0`-`efficientnet_b7`, `efficientnet_v2_s`, `efficientnet_v2_m`, `efficientnet_v2_l`
+- `--pretrained` / `--no-pretrained` で torchvision モデルの ImageNet 学習済み重みを使うか指定
 - ログ出力:
   - `train_log.json`
   - `lr_curves.png`
@@ -43,6 +44,20 @@ CLI 追加:
   - per-class F1
   - classification report
   - confusion matrix
+
+### 2.1. 学習率スケジューラを追加
+
+`--lr-scheduler` で PyTorch の代表的な scheduler を選択できます。既定値は `none` のため、既存コマンドでは従来通り固定学習率です。
+
+対応 scheduler:
+
+- `step`
+- `multistep`
+- `exponential`
+- `cosine`
+- `plateau`
+- `cosine_warm_restarts`
+- `onecycle`
 
 ### 3. `--workers` の不整合を修正
 
@@ -137,7 +152,8 @@ apk2img-ml train-eval-mrun --help
 ```bash
 PYTHONPATH=src python3 -m apk2img_ml train-eval-mrun \
   --data-root ./images256 \
-  --model tiny \
+  --model resnet50 \
+  --pretrained \
   --epochs 15 \
   --batch 32 \
   --lr 1e-4 \
@@ -150,6 +166,8 @@ PYTHONPATH=src python3 -m apk2img_ml train-eval-mrun \
   --runs 3 \
   --log-dir ./results/train_eval_mrun
 ```
+
+`--pretrained` は既定で有効です。ランダム初期化から学習したい場合は `--no-pretrained` を指定します。
 
 `./images256` の想定構成:
 
@@ -201,6 +219,7 @@ PYTHONPATH=src python3 -m apk2img_ml tune-cnn \
   --data-root ./images256 \
   --trials 20 \
   --epochs 15 \
+  --pretrained \
   --models resnet18,resnet50,mobilenet_v2 \
   --batch-candidates 16,32,64 \
   --optimizer-candidates adam,adamw \
@@ -209,6 +228,25 @@ PYTHONPATH=src python3 -m apk2img_ml tune-cnn \
 ```
 
 `tune-cnn` は Optuna/TPE と MedianPruner を使い、`dev/` の train/val 分割で平均 best validation accuracy を最大化します。探索後は既定で最良 trial の設定を `test/` で評価します。
+
+`--pretrained` / `--no-pretrained` は探索対象ではなく、全 trial に共通の固定条件として適用されます。
+
+モデルごとに独立した study として探索する場合:
+
+```bash
+PYTHONPATH=src python3 -m apk2img_ml tune-cnn \
+  --data-root ./images256 \
+  --trials 20 \
+  --epochs 15 \
+  --models resnet18,resnet50 \
+  --batch-candidates 16,32,64 \
+  --optimizer-candidates adam,adamw \
+  --early-stopping-patience 3 \
+  --per-model \
+  --log-dir ./results/optuna_cnn_by_model
+```
+
+`--per-model` はモデル候補を1つの study で混ぜず、`resnet18` 用 study、`resnet50` 用 study のように分けて最適化します。集約結果は `per_model_tuning_log.json` に保存されます。
 
 ### 8. 結果集約ディレクトリ
 

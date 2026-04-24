@@ -5,7 +5,7 @@ import json
 import math
 import os
 import random
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 from pathlib import Path
 import sys
@@ -43,21 +43,46 @@ MODEL_HELP = (
     "efficientnet_v2_s|efficientnet_v2_m|efficientnet_v2_l"
 )
 SUPPORTED_OPTIMIZERS = ("adam", "adamw", "sgd")
+SUPPORTED_LR_SCHEDULERS = (
+    "none",
+    "step",
+    "multistep",
+    "exponential",
+    "cosine",
+    "plateau",
+    "cosine_warm_restarts",
+    "onecycle",
+)
 DEFAULT_TUNE_MODELS = ("resnet18", "resnet50", "mobilenet_v2")
 DEFAULT_TUNE_BATCHES = (16, 32, 64)
 DEFAULT_TUNE_OPTIMIZERS = ("adam", "adamw")
 DEFAULT_TUNE_WEIGHT_DECAYS = (0.0, 1e-6, 1e-5, 1e-4)
+DEFAULT_SCHEDULER_MILESTONES = (10, 20)
 
 
 @dataclass(frozen=True)
 class TrainEvalConfig:
     data_root: Path
     model: str = "resnet50"
+    pretrained: bool = True
     epochs: int = 15
     batch: int = 32
     lr: float = 1e-4
     optimizer: str = "adam"
     weight_decay: float = 0.0
+    lr_scheduler: str = "none"
+    scheduler_step_size: int = 5
+    scheduler_milestones: tuple[int, ...] = DEFAULT_SCHEDULER_MILESTONES
+    scheduler_gamma: float = 0.1
+    scheduler_exp_gamma: float = 0.95
+    scheduler_patience: int = 2
+    scheduler_t_max: int | None = None
+    scheduler_eta_min: float = 0.0
+    scheduler_t_0: int | None = None
+    scheduler_t_mult: int = 1
+    scheduler_pct_start: float = 0.3
+    scheduler_div_factor: float = 25.0
+    scheduler_final_div_factor: float = 1e4
     workers: int = 4
     in_ch: int = 1
     resize: str = "256,256"
@@ -74,9 +99,23 @@ class TuneConfig:
     data_root: Path
     trials: int = 20
     epochs: int = 15
+    pretrained: bool = True
     workers: int = 4
     in_ch: int = 1
     resize: str = "256,256"
+    lr_scheduler: str = "none"
+    scheduler_step_size: int = 5
+    scheduler_milestones: tuple[int, ...] = DEFAULT_SCHEDULER_MILESTONES
+    scheduler_gamma: float = 0.1
+    scheduler_exp_gamma: float = 0.95
+    scheduler_patience: int = 2
+    scheduler_t_max: int | None = None
+    scheduler_eta_min: float = 0.0
+    scheduler_t_0: int | None = None
+    scheduler_t_mult: int = 1
+    scheduler_pct_start: float = 0.3
+    scheduler_div_factor: float = 25.0
+    scheduler_final_div_factor: float = 1e4
     seed: int = 3407
     runs: int = 1
     log_dir: Path = Path("logs/optuna_cnn")
@@ -124,6 +163,15 @@ def _positive_float(value: str) -> float:
     if parsed <= 0:
         raise argparse.ArgumentTypeError(f"expected a positive float, got: {value}")
     return parsed
+
+
+def _csv_positive_ints(value: str) -> tuple[int, ...]:
+    items = tuple(int(item.strip()) for item in value.split(",") if item.strip())
+    if not items:
+        raise argparse.ArgumentTypeError("expected at least one comma-separated integer")
+    if any(item <= 0 for item in items):
+        raise argparse.ArgumentTypeError(f"expected positive integers, got: {value}")
+    return items
 
 
 def _parse_resize_arg(value: str) -> tuple[int, int] | None:
@@ -288,6 +336,45 @@ def _plot_histories(histories: list[list[float]], ylabel: str, title: str, out_p
     plt.close()
 
 
+def _validate_lr_scheduler_config(config: Any) -> None:
+    scheduler_name = config.lr_scheduler.lower()
+    if scheduler_name not in SUPPORTED_LR_SCHEDULERS:
+        raise ValueError(
+            f"lr_scheduler must be one of {', '.join(SUPPORTED_LR_SCHEDULERS)}: "
+            f"{config.lr_scheduler}"
+        )
+    if config.scheduler_step_size <= 0:
+        raise ValueError(f"scheduler_step_size must be positive: {config.scheduler_step_size}")
+    if not config.scheduler_milestones:
+        raise ValueError("scheduler_milestones must not be empty")
+    if any(milestone <= 0 for milestone in config.scheduler_milestones):
+        raise ValueError(f"scheduler_milestones must be positive: {config.scheduler_milestones}")
+    if config.scheduler_gamma <= 0:
+        raise ValueError(f"scheduler_gamma must be positive: {config.scheduler_gamma}")
+    if scheduler_name == "plateau" and config.scheduler_gamma >= 1.0:
+        raise ValueError("scheduler_gamma must be < 1.0 when lr_scheduler is plateau")
+    if config.scheduler_exp_gamma <= 0:
+        raise ValueError(f"scheduler_exp_gamma must be positive: {config.scheduler_exp_gamma}")
+    if config.scheduler_patience < 0:
+        raise ValueError(f"scheduler_patience must be non-negative: {config.scheduler_patience}")
+    if config.scheduler_t_max is not None and config.scheduler_t_max <= 0:
+        raise ValueError(f"scheduler_t_max must be positive when set: {config.scheduler_t_max}")
+    if config.scheduler_eta_min < 0:
+        raise ValueError(f"scheduler_eta_min must be non-negative: {config.scheduler_eta_min}")
+    if config.scheduler_t_0 is not None and config.scheduler_t_0 <= 0:
+        raise ValueError(f"scheduler_t_0 must be positive when set: {config.scheduler_t_0}")
+    if config.scheduler_t_mult <= 0:
+        raise ValueError(f"scheduler_t_mult must be positive: {config.scheduler_t_mult}")
+    if not 0.0 < config.scheduler_pct_start < 1.0:
+        raise ValueError(f"scheduler_pct_start must be between 0 and 1: {config.scheduler_pct_start}")
+    if config.scheduler_div_factor <= 0:
+        raise ValueError(f"scheduler_div_factor must be positive: {config.scheduler_div_factor}")
+    if config.scheduler_final_div_factor <= 0:
+        raise ValueError(
+            f"scheduler_final_div_factor must be positive: {config.scheduler_final_div_factor}"
+        )
+
+
 def _validate_train_eval_config(config: TrainEvalConfig) -> None:
     if config.workers < 0:
         raise ValueError(f"workers must be non-negative: {config.workers}")
@@ -315,6 +402,7 @@ def _validate_train_eval_config(config: TrainEvalConfig) -> None:
         raise ValueError(
             f"optimizer must be one of {', '.join(SUPPORTED_OPTIMIZERS)}: {config.optimizer}"
         )
+    _validate_lr_scheduler_config(config)
 
 
 def _build_optimizer(
@@ -338,6 +426,85 @@ def _build_optimizer(
             nesterov=True,
         )
     raise ValueError(f"unsupported optimizer: {name}")
+
+
+def _build_lr_scheduler(
+    config: TrainEvalConfig,
+    optimizer: torch.optim.Optimizer,
+    *,
+    steps_per_epoch: int,
+) -> Any | None:
+    scheduler_name = config.lr_scheduler.lower()
+    if scheduler_name == "none":
+        return None
+    if scheduler_name == "step":
+        return torch.optim.lr_scheduler.StepLR(
+            optimizer,
+            step_size=config.scheduler_step_size,
+            gamma=config.scheduler_gamma,
+        )
+    if scheduler_name == "multistep":
+        return torch.optim.lr_scheduler.MultiStepLR(
+            optimizer,
+            milestones=list(config.scheduler_milestones),
+            gamma=config.scheduler_gamma,
+        )
+    if scheduler_name == "exponential":
+        return torch.optim.lr_scheduler.ExponentialLR(
+            optimizer,
+            gamma=config.scheduler_exp_gamma,
+        )
+    if scheduler_name == "cosine":
+        return torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            T_max=config.scheduler_t_max or config.epochs,
+            eta_min=config.scheduler_eta_min,
+        )
+    if scheduler_name == "plateau":
+        return torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode="max",
+            factor=config.scheduler_gamma,
+            patience=config.scheduler_patience,
+        )
+    if scheduler_name == "cosine_warm_restarts":
+        return torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+            optimizer,
+            T_0=config.scheduler_t_0 or config.scheduler_step_size,
+            T_mult=config.scheduler_t_mult,
+            eta_min=config.scheduler_eta_min,
+        )
+    if scheduler_name == "onecycle":
+        return torch.optim.lr_scheduler.OneCycleLR(
+            optimizer,
+            max_lr=config.lr,
+            epochs=config.epochs,
+            steps_per_epoch=steps_per_epoch,
+            pct_start=config.scheduler_pct_start,
+            div_factor=config.scheduler_div_factor,
+            final_div_factor=config.scheduler_final_div_factor,
+        )
+    raise ValueError(f"unsupported lr_scheduler: {config.lr_scheduler}")
+
+
+def _is_batch_lr_scheduler(scheduler: Any | None) -> bool:
+    return isinstance(scheduler, torch.optim.lr_scheduler.OneCycleLR)
+
+
+def _step_lr_scheduler(scheduler: Any | None, val_acc: float) -> None:
+    if scheduler is None:
+        return
+    if _is_batch_lr_scheduler(scheduler):
+        return
+    if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+        scheduler.step(val_acc)
+        return
+    scheduler.step()
+
+
+def _step_batch_lr_scheduler(scheduler: Any | None) -> None:
+    if _is_batch_lr_scheduler(scheduler):
+        scheduler.step()
 
 
 def _report_trial(trial: Any, value: float, step: int) -> None:
@@ -381,6 +548,7 @@ def _train_model(
         lr=config.lr,
         weight_decay=config.weight_decay,
     )
+    scheduler = _build_lr_scheduler(config, optimizer, steps_per_epoch=len(train_loader))
     criterion = torch.nn.CrossEntropyLoss()
 
     epoch_losses: list[float] = []
@@ -407,6 +575,7 @@ def _train_model(
             loss = criterion(model(inputs), targets)
             loss.backward()
             optimizer.step()
+            _step_batch_lr_scheduler(scheduler)
             running_loss += loss.item() * targets.size(0)
 
         epoch_loss = running_loss / len(train_loader.dataset)
@@ -433,6 +602,8 @@ def _train_model(
                 best_state = _snapshot_state_dict(model)
         else:
             epochs_without_improvement += 1
+
+        _step_lr_scheduler(scheduler, float(val_acc))
 
         if (
             config.early_stopping_patience > 0
@@ -517,7 +688,7 @@ def run_train_eval_mrun(config: TrainEvalConfig) -> dict[str, Any]:
         model = get_model(
             config.model,
             num_classes=2,
-            pretrained=True,
+            pretrained=config.pretrained,
             in_ch=config.in_ch,
         ).to(device)
         train_result = _train_model(
@@ -736,6 +907,7 @@ def _validate_tune_config(config: TuneConfig) -> None:
         raise ValueError(f"in_ch must be positive: {config.in_ch}")
     if config.runs <= 0:
         raise ValueError(f"runs must be positive: {config.runs}")
+    _validate_lr_scheduler_config(config)
     if not config.model_candidates:
         raise ValueError("model_candidates must not be empty")
     if not config.batch_candidates:
@@ -811,7 +983,7 @@ def _run_validation_mrun(config: TrainEvalConfig, *, trial: Any | None = None) -
         model = get_model(
             config.model,
             num_classes=2,
-            pretrained=True,
+            pretrained=config.pretrained,
             in_ch=config.in_ch,
         ).to(device)
         train_result = _train_model(
@@ -848,6 +1020,7 @@ def _suggest_train_eval_config(config: TuneConfig, trial: Any) -> TrainEvalConfi
     return TrainEvalConfig(
         data_root=config.data_root,
         model=trial.suggest_categorical("model", list(config.model_candidates)),
+        pretrained=config.pretrained,
         epochs=config.epochs,
         batch=trial.suggest_categorical("batch", list(config.batch_candidates)),
         lr=trial.suggest_float("lr", config.lr_low, config.lr_high, log=True),
@@ -859,6 +1032,19 @@ def _suggest_train_eval_config(config: TuneConfig, trial: Any) -> TrainEvalConfi
         workers=config.workers,
         in_ch=config.in_ch,
         resize=config.resize,
+        lr_scheduler=config.lr_scheduler,
+        scheduler_step_size=config.scheduler_step_size,
+        scheduler_milestones=config.scheduler_milestones,
+        scheduler_gamma=config.scheduler_gamma,
+        scheduler_exp_gamma=config.scheduler_exp_gamma,
+        scheduler_patience=config.scheduler_patience,
+        scheduler_t_max=config.scheduler_t_max,
+        scheduler_eta_min=config.scheduler_eta_min,
+        scheduler_t_0=config.scheduler_t_0,
+        scheduler_t_mult=config.scheduler_t_mult,
+        scheduler_pct_start=config.scheduler_pct_start,
+        scheduler_div_factor=config.scheduler_div_factor,
+        scheduler_final_div_factor=config.scheduler_final_div_factor,
         seed=config.seed,
         runs=config.runs,
         log_dir=config.log_dir,
@@ -877,6 +1063,7 @@ def _train_eval_config_from_params(
     return TrainEvalConfig(
         data_root=config.data_root,
         model=str(params["model"]),
+        pretrained=config.pretrained,
         epochs=config.epochs,
         batch=int(params["batch"]),
         lr=float(params["lr"]),
@@ -885,6 +1072,19 @@ def _train_eval_config_from_params(
         workers=config.workers,
         in_ch=config.in_ch,
         resize=config.resize,
+        lr_scheduler=config.lr_scheduler,
+        scheduler_step_size=config.scheduler_step_size,
+        scheduler_milestones=config.scheduler_milestones,
+        scheduler_gamma=config.scheduler_gamma,
+        scheduler_exp_gamma=config.scheduler_exp_gamma,
+        scheduler_patience=config.scheduler_patience,
+        scheduler_t_max=config.scheduler_t_max,
+        scheduler_eta_min=config.scheduler_eta_min,
+        scheduler_t_0=config.scheduler_t_0,
+        scheduler_t_mult=config.scheduler_t_mult,
+        scheduler_pct_start=config.scheduler_pct_start,
+        scheduler_div_factor=config.scheduler_div_factor,
+        scheduler_final_div_factor=config.scheduler_final_div_factor,
         seed=config.seed,
         runs=config.runs,
         log_dir=log_dir,
@@ -997,6 +1197,85 @@ def run_tune_cnn(config: TuneConfig) -> dict[str, Any]:
     }
 
 
+def _safe_study_suffix(value: str) -> str:
+    return "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in value)
+
+
+def run_tune_cnn_by_model(config: TuneConfig) -> dict[str, Any]:
+    """Run an independent Optuna study for each requested model candidate."""
+    _validate_tune_config(config)
+
+    log_root = config.log_dir
+    log_root.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    tune_dir = log_root / f"{timestamp}_by_model"
+    tune_dir.mkdir(parents=True, exist_ok=True)
+    log_json_path = tune_dir / "per_model_tuning_log.json"
+
+    model_results: list[dict[str, Any]] = []
+    best_model: dict[str, Any] | None = None
+
+    for index, model_name in enumerate(config.model_candidates, start=1):
+        safe_model = _safe_study_suffix(model_name)
+        print(f"\n=== Tuning model {index}/{len(config.model_candidates)}: {model_name} ===")
+
+        study_name = None
+        if config.study_name is not None:
+            study_name = f"{config.study_name}_{safe_model}"
+
+        model_config = replace(
+            config,
+            model_candidates=(model_name,),
+            log_dir=tune_dir / safe_model,
+            study_name=study_name,
+        )
+        result = run_tune_cnn(model_config)
+        summary = result["summary"]
+        best_trial = summary.get("best_trial")
+        best_value = None if best_trial is None else best_trial.get("value")
+
+        model_summary = {
+            "model": model_name,
+            "tune_dir": str(result["tune_dir"]),
+            "log_json_path": str(result["log_json_path"]),
+            "best_value": best_value,
+            "best_trial": best_trial,
+            "best_eval": summary.get("best_eval"),
+        }
+        model_results.append(model_summary)
+
+        if best_value is not None and (
+            best_model is None or float(best_value) > float(best_model["best_value"])
+        ):
+            best_model = model_summary
+
+    aggregate_summary = {
+        "timestamp": timestamp,
+        "args": _serializable_dataclass(config),
+        "mode": "per_model",
+        "objective": "best validation accuracy per independent model study",
+        "models": model_results,
+        "best_model": best_model,
+    }
+    with log_json_path.open("w", encoding="utf-8") as handle:
+        json.dump(aggregate_summary, handle, ensure_ascii=False, indent=2)
+
+    if best_model is not None:
+        print(
+            f"\nBest model: {best_model['model']}  "
+            f"val_acc={float(best_model['best_value']):.4f}"
+        )
+    print(f"Saved per-model Optuna summary: {log_json_path}")
+
+    return {
+        "summary": aggregate_summary,
+        "tune_dir": tune_dir,
+        "log_json_path": log_json_path,
+        "model_results": model_results,
+        "best_model": best_model,
+    }
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-root", required=True, type=Path, help="parent directory containing dev/ and test/")
@@ -1005,11 +1284,34 @@ def build_parser() -> argparse.ArgumentParser:
         default="resnet50",
         help=MODEL_HELP,
     )
+    parser.add_argument(
+        "--pretrained",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="use torchvision ImageNet pretrained weights when available",
+    )
     parser.add_argument("--epochs", type=int, default=15)
     parser.add_argument("--batch", type=int, default=32)
     parser.add_argument("--lr", type=_positive_float, default=1e-4)
     parser.add_argument("--optimizer", choices=SUPPORTED_OPTIMIZERS, default="adam")
     parser.add_argument("--weight-decay", type=_non_negative_float, default=0.0)
+    parser.add_argument("--lr-scheduler", choices=SUPPORTED_LR_SCHEDULERS, default="none")
+    parser.add_argument("--scheduler-step-size", type=_positive_int, default=5)
+    parser.add_argument(
+        "--scheduler-milestones",
+        type=_csv_positive_ints,
+        default=DEFAULT_SCHEDULER_MILESTONES,
+    )
+    parser.add_argument("--scheduler-gamma", type=_positive_float, default=0.1)
+    parser.add_argument("--scheduler-exp-gamma", type=_positive_float, default=0.95)
+    parser.add_argument("--scheduler-patience", type=_non_negative_int, default=2)
+    parser.add_argument("--scheduler-t-max", type=_positive_int)
+    parser.add_argument("--scheduler-eta-min", type=_non_negative_float, default=0.0)
+    parser.add_argument("--scheduler-t-0", type=_positive_int)
+    parser.add_argument("--scheduler-t-mult", type=_positive_int, default=1)
+    parser.add_argument("--scheduler-pct-start", type=_positive_float, default=0.3)
+    parser.add_argument("--scheduler-div-factor", type=_positive_float, default=25.0)
+    parser.add_argument("--scheduler-final-div-factor", type=_positive_float, default=1e4)
     parser.add_argument("--workers", type=_non_negative_int, default=4)
     parser.add_argument("--in-ch", type=_positive_int, default=1, help="input channel count")
     parser.add_argument(
@@ -1032,11 +1334,25 @@ def main(argv: list[str] | None = None) -> int:
     config = TrainEvalConfig(
         data_root=args.data_root,
         model=args.model,
+        pretrained=args.pretrained,
         epochs=args.epochs,
         batch=args.batch,
         lr=args.lr,
         optimizer=args.optimizer,
         weight_decay=args.weight_decay,
+        lr_scheduler=args.lr_scheduler,
+        scheduler_step_size=args.scheduler_step_size,
+        scheduler_milestones=args.scheduler_milestones,
+        scheduler_gamma=args.scheduler_gamma,
+        scheduler_exp_gamma=args.scheduler_exp_gamma,
+        scheduler_patience=args.scheduler_patience,
+        scheduler_t_max=args.scheduler_t_max,
+        scheduler_eta_min=args.scheduler_eta_min,
+        scheduler_t_0=args.scheduler_t_0,
+        scheduler_t_mult=args.scheduler_t_mult,
+        scheduler_pct_start=args.scheduler_pct_start,
+        scheduler_div_factor=args.scheduler_div_factor,
+        scheduler_final_div_factor=args.scheduler_final_div_factor,
         workers=args.workers,
         in_ch=args.in_ch,
         resize=args.resize,

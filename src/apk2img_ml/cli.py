@@ -13,6 +13,17 @@ CNN_MODEL_HELP = (
     "efficientnet_v2_s|efficientnet_v2_m|efficientnet_v2_l"
 )
 CNN_OPTIMIZERS = ("adam", "adamw", "sgd")
+CNN_LR_SCHEDULERS = (
+    "none",
+    "step",
+    "multistep",
+    "exponential",
+    "cosine",
+    "plateau",
+    "cosine_warm_restarts",
+    "onecycle",
+)
+DEFAULT_SCHEDULER_MILESTONES = (10, 20)
 
 
 def _non_negative_int(value: str) -> int:
@@ -145,11 +156,34 @@ def _add_train_eval_mrun_parser(subparsers: argparse._SubParsersAction) -> None:
         default="resnet50",
         help=CNN_MODEL_HELP,
     )
+    parser.add_argument(
+        "--pretrained",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Use torchvision ImageNet pretrained weights when available",
+    )
     parser.add_argument("--epochs", type=int, default=15)
     parser.add_argument("--batch", type=int, default=32)
     parser.add_argument("--lr", type=_positive_float, default=1e-4)
     parser.add_argument("--optimizer", choices=CNN_OPTIMIZERS, default="adam")
     parser.add_argument("--weight-decay", type=_non_negative_float, default=0.0)
+    parser.add_argument("--lr-scheduler", choices=CNN_LR_SCHEDULERS, default="none")
+    parser.add_argument("--scheduler-step-size", type=_positive_int, default=5)
+    parser.add_argument(
+        "--scheduler-milestones",
+        type=_csv_positive_ints,
+        default=DEFAULT_SCHEDULER_MILESTONES,
+    )
+    parser.add_argument("--scheduler-gamma", type=_positive_float, default=0.1)
+    parser.add_argument("--scheduler-exp-gamma", type=_positive_float, default=0.95)
+    parser.add_argument("--scheduler-patience", type=_non_negative_int, default=2)
+    parser.add_argument("--scheduler-t-max", type=_positive_int)
+    parser.add_argument("--scheduler-eta-min", type=_non_negative_float, default=0.0)
+    parser.add_argument("--scheduler-t-0", type=_positive_int)
+    parser.add_argument("--scheduler-t-mult", type=_positive_int, default=1)
+    parser.add_argument("--scheduler-pct-start", type=_positive_float, default=0.3)
+    parser.add_argument("--scheduler-div-factor", type=_positive_float, default=25.0)
+    parser.add_argument("--scheduler-final-div-factor", type=_positive_float, default=1e4)
     parser.add_argument("--workers", type=_non_negative_int, default=4)
     parser.add_argument("--in-ch", type=_positive_int, default=1)
     parser.add_argument("--resize", type=str, default="256,256")
@@ -170,6 +204,12 @@ def _add_tune_cnn_parser(subparsers: argparse._SubParsersAction) -> None:
     parser.add_argument("--data-root", type=Path, required=True)
     parser.add_argument("--trials", type=_positive_int, default=20)
     parser.add_argument("--epochs", type=_positive_int, default=15)
+    parser.add_argument(
+        "--pretrained",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Use torchvision ImageNet pretrained weights for every trial",
+    )
     parser.add_argument("--workers", type=_non_negative_int, default=4)
     parser.add_argument("--in-ch", type=_positive_int, default=1)
     parser.add_argument("--resize", type=str, default="256,256")
@@ -190,12 +230,34 @@ def _add_tune_cnn_parser(subparsers: argparse._SubParsersAction) -> None:
         type=_csv_non_negative_floats,
         default=(0.0, 1e-6, 1e-5, 1e-4),
     )
+    parser.add_argument("--lr-scheduler", choices=CNN_LR_SCHEDULERS, default="none")
+    parser.add_argument("--scheduler-step-size", type=_positive_int, default=5)
+    parser.add_argument(
+        "--scheduler-milestones",
+        type=_csv_positive_ints,
+        default=DEFAULT_SCHEDULER_MILESTONES,
+    )
+    parser.add_argument("--scheduler-gamma", type=_positive_float, default=0.1)
+    parser.add_argument("--scheduler-exp-gamma", type=_positive_float, default=0.95)
+    parser.add_argument("--scheduler-patience", type=_non_negative_int, default=2)
+    parser.add_argument("--scheduler-t-max", type=_positive_int)
+    parser.add_argument("--scheduler-eta-min", type=_non_negative_float, default=0.0)
+    parser.add_argument("--scheduler-t-0", type=_positive_int)
+    parser.add_argument("--scheduler-t-mult", type=_positive_int, default=1)
+    parser.add_argument("--scheduler-pct-start", type=_positive_float, default=0.3)
+    parser.add_argument("--scheduler-div-factor", type=_positive_float, default=25.0)
+    parser.add_argument("--scheduler-final-div-factor", type=_positive_float, default=1e4)
     parser.add_argument("--early-stopping-patience", type=_non_negative_int, default=3)
     parser.add_argument("--early-stopping-min-delta", type=_non_negative_float, default=0.0)
     parser.add_argument("--restore-best", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--pruner-startup-trials", type=_non_negative_int, default=5)
     parser.add_argument("--pruner-warmup-epochs", type=_non_negative_int, default=2)
     parser.add_argument("--evaluate-best", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument(
+        "--per-model",
+        action="store_true",
+        help="Run one independent Optuna study per model candidate instead of mixing models in one study",
+    )
     parser.set_defaults(handler=_handle_tune_cnn)
 
 
@@ -328,11 +390,25 @@ def _handle_train_eval_mrun(args: argparse.Namespace) -> int:
     config = TrainEvalConfig(
         data_root=args.data_root,
         model=args.model,
+        pretrained=args.pretrained,
         epochs=args.epochs,
         batch=args.batch,
         lr=args.lr,
         optimizer=args.optimizer,
         weight_decay=args.weight_decay,
+        lr_scheduler=args.lr_scheduler,
+        scheduler_step_size=args.scheduler_step_size,
+        scheduler_milestones=args.scheduler_milestones,
+        scheduler_gamma=args.scheduler_gamma,
+        scheduler_exp_gamma=args.scheduler_exp_gamma,
+        scheduler_patience=args.scheduler_patience,
+        scheduler_t_max=args.scheduler_t_max,
+        scheduler_eta_min=args.scheduler_eta_min,
+        scheduler_t_0=args.scheduler_t_0,
+        scheduler_t_mult=args.scheduler_t_mult,
+        scheduler_pct_start=args.scheduler_pct_start,
+        scheduler_div_factor=args.scheduler_div_factor,
+        scheduler_final_div_factor=args.scheduler_final_div_factor,
         workers=args.workers,
         in_ch=args.in_ch,
         resize=args.resize,
@@ -349,12 +425,13 @@ def _handle_train_eval_mrun(args: argparse.Namespace) -> int:
 
 
 def _handle_tune_cnn(args: argparse.Namespace) -> int:
-    from .cnn.train_eval_mrun import TuneConfig, run_tune_cnn
+    from .cnn.train_eval_mrun import TuneConfig, run_tune_cnn, run_tune_cnn_by_model
 
     config = TuneConfig(
         data_root=args.data_root,
         trials=args.trials,
         epochs=args.epochs,
+        pretrained=args.pretrained,
         workers=args.workers,
         in_ch=args.in_ch,
         resize=args.resize,
@@ -371,6 +448,19 @@ def _handle_tune_cnn(args: argparse.Namespace) -> int:
         lr_low=args.lr_low,
         lr_high=args.lr_high,
         weight_decay_candidates=args.weight_decay_candidates,
+        lr_scheduler=args.lr_scheduler,
+        scheduler_step_size=args.scheduler_step_size,
+        scheduler_milestones=args.scheduler_milestones,
+        scheduler_gamma=args.scheduler_gamma,
+        scheduler_exp_gamma=args.scheduler_exp_gamma,
+        scheduler_patience=args.scheduler_patience,
+        scheduler_t_max=args.scheduler_t_max,
+        scheduler_eta_min=args.scheduler_eta_min,
+        scheduler_t_0=args.scheduler_t_0,
+        scheduler_t_mult=args.scheduler_t_mult,
+        scheduler_pct_start=args.scheduler_pct_start,
+        scheduler_div_factor=args.scheduler_div_factor,
+        scheduler_final_div_factor=args.scheduler_final_div_factor,
         early_stopping_patience=args.early_stopping_patience,
         early_stopping_min_delta=args.early_stopping_min_delta,
         restore_best=args.restore_best,
@@ -378,7 +468,7 @@ def _handle_tune_cnn(args: argparse.Namespace) -> int:
         pruner_warmup_epochs=args.pruner_warmup_epochs,
         evaluate_best=args.evaluate_best,
     )
-    result = run_tune_cnn(config)
+    result = run_tune_cnn_by_model(config) if args.per_model else run_tune_cnn(config)
     print(f"Saved Optuna logs under: {result['tune_dir']}")
     return 0
 

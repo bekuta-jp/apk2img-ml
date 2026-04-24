@@ -73,7 +73,8 @@ python -m apk2img_ml docvec-to-png \
 ```bash
 python -m apk2img_ml train-eval-mrun \
   --data-root ./images256 \
-  --model tiny \
+  --model resnet50 \
+  --pretrained \
   --epochs 15 \
   --batch 32 \
   --lr 1e-4 \
@@ -93,7 +94,10 @@ python -m apk2img_ml train-eval-mrun \
 - `test/` で最終評価
 - `train_log.json` と各種学習曲線を保存
 - `--lr`, `--optimizer`, `--weight-decay` に対応
+- `--lr-scheduler none|step|multistep|exponential|cosine|plateau|cosine_warm_restarts|onecycle` に対応
+  - 既定値は `none` のため、従来通り学習率は固定です
 - `--early-stopping-patience` による早期停止と best epoch 復元に対応
+- `--pretrained` / `--no-pretrained` で torchvision モデルの学習済み重みを使うか指定可能
 - `--workers 0` に対応
 - 任意チャネル数に対応
 - `tiny` は `256x256` 互換を保ったまま任意入力サイズに対応
@@ -106,6 +110,7 @@ python -m apk2img_ml tune-cnn \
   --data-root ./images256 \
   --trials 20 \
   --epochs 15 \
+  --pretrained \
   --models resnet18,resnet50,mobilenet_v2 \
   --batch-candidates 16,32,64 \
   --optimizer-candidates adam,adamw \
@@ -114,6 +119,25 @@ python -m apk2img_ml tune-cnn \
 ```
 
 `tune-cnn` は Optuna/TPE と pruning を使い、`dev/` の train/val 分割に対する平均 best validation accuracy を最大化します。探索後は既定で最良 trial の設定を `test/` で評価します。
+
+`--pretrained` が既定で有効です。ランダム初期化から比較したい場合は `--no-pretrained` を指定します。
+
+モデルごとに独立してハイパラ探索したい場合は `--per-model` を付けます。
+
+```bash
+python -m apk2img_ml tune-cnn \
+  --data-root ./images256 \
+  --trials 20 \
+  --epochs 15 \
+  --models resnet18,resnet50 \
+  --batch-candidates 16,32,64 \
+  --optimizer-candidates adam,adamw \
+  --early-stopping-patience 3 \
+  --per-model \
+  --log-dir ./results/optuna_cnn_by_model
+```
+
+`--per-model` では `resnet18` と `resnet50` を同じ study 内で競わせず、モデルごとに別 study を作成して最適化します。最後にモデル別の best trial と全体の best model を `per_model_tuning_log.json` に保存します。
 
 ## 補足
 
