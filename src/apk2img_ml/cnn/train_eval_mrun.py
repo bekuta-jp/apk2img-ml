@@ -60,6 +60,31 @@ DEFAULT_TUNE_WEIGHT_DECAYS = (0.0, 1e-6, 1e-5, 1e-4)
 DEFAULT_SCHEDULER_MILESTONES = (10, 20)
 
 
+def _in_notebook() -> bool:
+    try:
+        from IPython import get_ipython
+    except Exception:
+        return False
+
+    shell = get_ipython()
+    if shell is None:
+        return False
+    if shell.__class__.__name__ == "ZMQInteractiveShell":
+        return True
+    return "ipykernel" in sys.modules
+
+
+def _progress_enabled() -> bool:
+    if _in_notebook():
+        return True
+    stream = getattr(sys, "stderr", None)
+    if stream is None or not hasattr(stream, "isatty"):
+        return False
+    if not stream.isatty():
+        return False
+    return os.environ.get("TERM", "").lower() != "dumb"
+
+
 @dataclass(frozen=True)
 class TrainEvalConfig:
     data_root: Path
@@ -560,6 +585,7 @@ def _train_model(
     epochs_without_improvement = 0
     early_stopped = False
     stopped_epoch: int | None = None
+    progress_enabled = _progress_enabled()
 
     for epoch in range(1, config.epochs + 1):
         model.train()
@@ -568,6 +594,8 @@ def _train_model(
             train_loader,
             desc=f"Run {run_idx + 1}/{config.runs} Epoch {epoch:02d} [train]",
             leave=False,
+            disable=not progress_enabled,
+            dynamic_ncols=True,
         ):
             inputs = inputs.to(device, non_blocking=True)
             targets = targets.to(device, non_blocking=True)
@@ -1143,7 +1171,7 @@ def run_tune_cnn(config: TuneConfig) -> dict[str, Any]:
         n_trials=config.trials,
         timeout=config.timeout,
         n_jobs=config.n_jobs,
-        show_progress_bar=True,
+        show_progress_bar=_progress_enabled(),
     )
 
     best_trial = None
