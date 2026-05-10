@@ -1,0 +1,151 @@
+{
+  "timestamp": "20260510-153319",
+  "args": {
+    "data_root": "apk2img-ml-datasets/data/sdhash/image_rgb_vi",
+    "model": "resnet34",
+    "pretrained": true,
+    "epochs": 100,
+    "batch": 8,
+    "lr": 0.0002462084374714394,
+    "optimizer": "adam",
+    "weight_decay": 0.0,
+    "lr_scheduler": "none",
+    "scheduler_step_size": 5,
+    "scheduler_milestones": [
+      10,
+      20
+    ],
+    "scheduler_gamma": 0.1,
+    "scheduler_exp_gamma": 0.95,
+    "scheduler_patience": 2,
+    "scheduler_t_max": null,
+    "scheduler_eta_min": 0.0,
+    "scheduler_t_0": null,
+    "scheduler_t_mult": 1,
+    "scheduler_pct_start": 0.3,
+    "scheduler_div_factor": 25.0,
+    "scheduler_final_div_factor": 10000.0,
+    "workers": 4,
+    "in_ch": 1,
+    "resize": "256,256",
+    "seed": 3407,
+    "runs": 1,
+    "log_dir": "/home/IM25D009/git_workspace/results/rgb_vi/cnn_optuna_pre/20260510-125457/best_eval",
+    "early_stopping_patience": 3,
+    "early_stopping_min_delta": 0.0,
+    "restore_best": true
+  },
+  "device": "cuda",
+  "runs": [
+    {
+      "run": 1,
+      "seed": 3407,
+      "epochs": 100,
+      "train_loss_per_epoch": [
+        0.3949142359439284,
+        0.2087402400537394,
+        0.15004865517048166,
+        0.1291279832527507,
+        0.11007860042748507,
+        0.0904329819852137,
+        0.0717698141648143,
+        0.05783713266567793,
+        0.037276217377118885,
+        0.039044783644663766,
+        0.029620330291016215,
+        0.03304769863182628
+      ],
+      "val_acc_per_epoch": [
+        0.821,
+        0.9265,
+        0.93,
+        0.8975,
+        0.9285,
+        0.951,
+        0.9345,
+        0.9395,
+        0.9545,
+        0.9455,
+        0.924,
+        0.9485
+      ],
+      "lr_per_epoch": [
+        0.0002462084374714394,
+        0.0002462084374714394,
+        0.0002462084374714394,
+        0.0002462084374714394,
+        0.0002462084374714394,
+        0.0002462084374714394,
+        0.0002462084374714394,
+        0.0002462084374714394,
+        0.0002462084374714394,
+        0.0002462084374714394,
+        0.0002462084374714394,
+        0.0002462084374714394
+      ],
+      "best_val_acc": 0.9545,
+      "best_epoch": 9,
+      "epochs_completed": 12,
+      "early_stopped": true,
+      "stopped_epoch": 12,
+      "test_acc": 0.966,
+      "test_f1": {
+        "macro": 0.9659958855021458,
+        "micro": 0.966,
+        "weighted": 0.9659958855021457,
+        "binary_malware": 0.9656218402426694,
+        "binary_benign": 0.9663699307616221,
+        "per_class": {
+          "benign": 0.9663699307616221,
+          "malware": 0.9656218402426694
+        }
+      },
+      "test_macro_f1": 0.9659958855021458,
+      "classification_report": "              precision    recall  f1-score   support\n\n      benign     0.9560    0.9770    0.9664      1000\n     malware     0.9765    0.9550    0.9656      1000\n\n    accuracy                         0.9660      2000\n   macro avg     0.9662    0.9660    0.9660      2000\nweighted avg     0.9662    0.9660    0.9660      2000\n",
+      "confusion_matrix": [
+        [
+          977,
+          23
+        ],
+        [
+          45,
+          955
+        ]
+      ],
+      "class_to_idx": {
+        "benign": 0,
+        "malware": 1
+      },
+      "label_order": {
+        "benign": 0,
+        "malware": 1
+      }
+    }
+  ],
+  "summary": {
+    "test_acc_mean": 0.966,
+    "test_acc_std": 0.0,
+    "macro_f1_mean": 0.9659958855021458,
+    "macro_f1_std": 0.0,
+    "micro_f1_mean": 0.966,
+    "micro_f1_std": 0.0,
+    "weighted_f1_mean": 0.9659958855021457,
+    "weighted_f1_std": 0.0,
+    "binary_malware_f1_mean": 0.9656218402426694,
+    "binary_malware_f1_std": 0.0,
+    "binary_benign_f1_mean": 0.9663699307616221,
+    "binary_benign_f1_std": 0.0,
+    "per_class_f1_mean": [
+      0.9663699307616221,
+      0.9656218402426694
+    ],
+    "per_class_f1_std": [
+      0.0,
+      0.0
+    ],
+    "per_class_f1_order": [
+      "benign",
+      "malware"
+    ]
+  }
+}

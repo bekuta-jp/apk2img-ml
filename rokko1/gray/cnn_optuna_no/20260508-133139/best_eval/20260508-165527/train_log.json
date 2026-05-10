@@ -1,0 +1,160 @@
+{
+  "timestamp": "20260508-165527",
+  "args": {
+    "data_root": "apk2img-ml-datasets/data/sdhash/image_gray",
+    "model": "resnet34",
+    "pretrained": false,
+    "epochs": 100,
+    "batch": 8,
+    "lr": 0.00011943624922223278,
+    "optimizer": "adamw",
+    "weight_decay": 1e-06,
+    "lr_scheduler": "none",
+    "scheduler_step_size": 5,
+    "scheduler_milestones": [
+      10,
+      20
+    ],
+    "scheduler_gamma": 0.1,
+    "scheduler_exp_gamma": 0.95,
+    "scheduler_patience": 2,
+    "scheduler_t_max": null,
+    "scheduler_eta_min": 0.0,
+    "scheduler_t_0": null,
+    "scheduler_t_mult": 1,
+    "scheduler_pct_start": 0.3,
+    "scheduler_div_factor": 25.0,
+    "scheduler_final_div_factor": 10000.0,
+    "workers": 4,
+    "in_ch": 1,
+    "resize": "256,256",
+    "seed": 3407,
+    "runs": 1,
+    "log_dir": "/home/IM25D009/git_workspace/results/gray/cnn_optuna_no/20260508-133139/best_eval",
+    "early_stopping_patience": 3,
+    "early_stopping_min_delta": 0.0,
+    "restore_best": true
+  },
+  "device": "cuda",
+  "runs": [
+    {
+      "run": 1,
+      "seed": 3407,
+      "epochs": 100,
+      "train_loss_per_epoch": [
+        0.35908709577843545,
+        0.17533225542074068,
+        0.13682814790541306,
+        0.1171398116069613,
+        0.10258811802859417,
+        0.08655085916054668,
+        0.07360126190120354,
+        0.07309264756861375,
+        0.05546124771956238,
+        0.04807345364910725,
+        0.044110063804248055,
+        0.03707349485153827,
+        0.02962880935583962,
+        0.03149935001225822,
+        0.0324780224740025
+      ],
+      "val_acc_per_epoch": [
+        0.9085,
+        0.933,
+        0.949,
+        0.9405,
+        0.947,
+        0.9505,
+        0.9425,
+        0.9535,
+        0.954,
+        0.951,
+        0.9505,
+        0.9565,
+        0.943,
+        0.9395,
+        0.956
+      ],
+      "lr_per_epoch": [
+        0.00011943624922223278,
+        0.00011943624922223278,
+        0.00011943624922223278,
+        0.00011943624922223278,
+        0.00011943624922223278,
+        0.00011943624922223278,
+        0.00011943624922223278,
+        0.00011943624922223278,
+        0.00011943624922223278,
+        0.00011943624922223278,
+        0.00011943624922223278,
+        0.00011943624922223278,
+        0.00011943624922223278,
+        0.00011943624922223278,
+        0.00011943624922223278
+      ],
+      "best_val_acc": 0.9565,
+      "best_epoch": 12,
+      "epochs_completed": 15,
+      "early_stopped": true,
+      "stopped_epoch": 15,
+      "test_acc": 0.9565,
+      "test_f1": {
+        "macro": 0.9564975529873556,
+        "micro": 0.9565,
+        "weighted": 0.9564975529873556,
+        "binary_malware": 0.9561712846347608,
+        "binary_benign": 0.9568238213399504,
+        "per_class": {
+          "benign": 0.9568238213399504,
+          "malware": 0.9561712846347608
+        }
+      },
+      "test_macro_f1": 0.9564975529873556,
+      "classification_report": "              precision    recall  f1-score   support\n\n      benign     0.9498    0.9640    0.9568      1000\n     malware     0.9635    0.9490    0.9562      1000\n\n    accuracy                         0.9565      2000\n   macro avg     0.9566    0.9565    0.9565      2000\nweighted avg     0.9566    0.9565    0.9565      2000\n",
+      "confusion_matrix": [
+        [
+          964,
+          36
+        ],
+        [
+          51,
+          949
+        ]
+      ],
+      "class_to_idx": {
+        "benign": 0,
+        "malware": 1
+      },
+      "label_order": {
+        "benign": 0,
+        "malware": 1
+      }
+    }
+  ],
+  "summary": {
+    "test_acc_mean": 0.9565,
+    "test_acc_std": 0.0,
+    "macro_f1_mean": 0.9564975529873556,
+    "macro_f1_std": 0.0,
+    "micro_f1_mean": 0.9565,
+    "micro_f1_std": 0.0,
+    "weighted_f1_mean": 0.9564975529873556,
+    "weighted_f1_std": 0.0,
+    "binary_malware_f1_mean": 0.9561712846347608,
+    "binary_malware_f1_std": 0.0,
+    "binary_benign_f1_mean": 0.9568238213399504,
+    "binary_benign_f1_std": 0.0,
+    "per_class_f1_mean": [
+      0.9568238213399504,
+      0.9561712846347608
+    ],
+    "per_class_f1_std": [
+      0.0,
+      0.0
+    ],
+    "per_class_f1_order": [
+      "benign",
+      "malware"
+    ]
+  }
+}
