@@ -1,0 +1,151 @@
+{
+  "timestamp": "20260511-114538",
+  "args": {
+    "data_root": "apk2img-ml-datasets/data/sdhash/image_rgb_hb",
+    "model": "resnet50",
+    "pretrained": false,
+    "epochs": 100,
+    "batch": 8,
+    "lr": 0.0002803316545066689,
+    "optimizer": "adamw",
+    "weight_decay": 1e-06,
+    "lr_scheduler": "none",
+    "scheduler_step_size": 5,
+    "scheduler_milestones": [
+      10,
+      20
+    ],
+    "scheduler_gamma": 0.1,
+    "scheduler_exp_gamma": 0.95,
+    "scheduler_patience": 2,
+    "scheduler_t_max": null,
+    "scheduler_eta_min": 0.0,
+    "scheduler_t_0": null,
+    "scheduler_t_mult": 1,
+    "scheduler_pct_start": 0.3,
+    "scheduler_div_factor": 25.0,
+    "scheduler_final_div_factor": 10000.0,
+    "workers": 4,
+    "in_ch": 1,
+    "resize": "256,256",
+    "seed": 3407,
+    "runs": 1,
+    "log_dir": "/home/IM25D009/git_workspace/results/rgb_hb/cnn_optuna_no/20260511-065320/best_eval",
+    "early_stopping_patience": 3,
+    "early_stopping_min_delta": 0.0,
+    "restore_best": true
+  },
+  "device": "cuda",
+  "runs": [
+    {
+      "run": 1,
+      "seed": 3407,
+      "epochs": 100,
+      "train_loss_per_epoch": [
+        0.48255041798017917,
+        0.24264317022264004,
+        0.1996947563069407,
+        0.18146973235253244,
+        0.1495489813699387,
+        0.15066566807113121,
+        0.13792389106960035,
+        0.12736103816324612,
+        0.11330362559709466,
+        0.11330189733492443,
+        0.10633038087970635,
+        0.09717672881897306
+      ],
+      "val_acc_per_epoch": [
+        0.866,
+        0.914,
+        0.899,
+        0.8775,
+        0.9285,
+        0.9485,
+        0.869,
+        0.9255,
+        0.9555,
+        0.9285,
+        0.9475,
+        0.939
+      ],
+      "lr_per_epoch": [
+        0.0002803316545066689,
+        0.0002803316545066689,
+        0.0002803316545066689,
+        0.0002803316545066689,
+        0.0002803316545066689,
+        0.0002803316545066689,
+        0.0002803316545066689,
+        0.0002803316545066689,
+        0.0002803316545066689,
+        0.0002803316545066689,
+        0.0002803316545066689,
+        0.0002803316545066689
+      ],
+      "best_val_acc": 0.9555,
+      "best_epoch": 9,
+      "epochs_completed": 12,
+      "early_stopped": true,
+      "stopped_epoch": 12,
+      "test_acc": 0.9525,
+      "test_f1": {
+        "macro": 0.9524965678770291,
+        "micro": 0.9525,
+        "weighted": 0.9524965678770291,
+        "binary_malware": 0.9520927887039838,
+        "binary_benign": 0.9529003470500743,
+        "per_class": {
+          "benign": 0.9529003470500743,
+          "malware": 0.9520927887039838
+        }
+      },
+      "test_macro_f1": 0.9524965678770291,
+      "classification_report": "              precision    recall  f1-score   support\n\n      benign     0.9449    0.9610    0.9529      1000\n     malware     0.9603    0.9440    0.9521      1000\n\n    accuracy                         0.9525      2000\n   macro avg     0.9526    0.9525    0.9525      2000\nweighted avg     0.9526    0.9525    0.9525      2000\n",
+      "confusion_matrix": [
+        [
+          961,
+          39
+        ],
+        [
+          56,
+          944
+        ]
+      ],
+      "class_to_idx": {
+        "benign": 0,
+        "malware": 1
+      },
+      "label_order": {
+        "benign": 0,
+        "malware": 1
+      }
+    }
+  ],
+  "summary": {
+    "test_acc_mean": 0.9525,
+    "test_acc_std": 0.0,
+    "macro_f1_mean": 0.9524965678770291,
+    "macro_f1_std": 0.0,
+    "micro_f1_mean": 0.9525,
+    "micro_f1_std": 0.0,
+    "weighted_f1_mean": 0.9524965678770291,
+    "weighted_f1_std": 0.0,
+    "binary_malware_f1_mean": 0.9520927887039838,
+    "binary_malware_f1_std": 0.0,
+    "binary_benign_f1_mean": 0.9529003470500743,
+    "binary_benign_f1_std": 0.0,
+    "per_class_f1_mean": [
+      0.9529003470500743,
+      0.9520927887039838
+    ],
+    "per_class_f1_std": [
+      0.0,
+      0.0
+    ],
+    "per_class_f1_order": [
+      "benign",
+      "malware"
+    ]
+  }
+}
