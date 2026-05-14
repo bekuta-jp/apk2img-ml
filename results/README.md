@@ -30,6 +30,8 @@ PYTHONPATH=src python3 -m apk2img_ml train-eval-mrun \
 - `loss_curves.png`
 - `val_acc_curves.png`
 
+学習率スケジューラは `--lr-scheduler` で指定できます。既定値は `none` なので、従来通り固定学習率です。
+
 ## CNN ハイパラ探索
 
 ```bash

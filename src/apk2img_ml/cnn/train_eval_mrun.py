@@ -5,11 +5,12 @@ import json
 import math
 import os
 import random
+import time
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 from pathlib import Path
 import sys
-from typing import Any
+from typing import Any, Callable
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -58,6 +59,9 @@ DEFAULT_TUNE_BATCHES = (16, 32, 64)
 DEFAULT_TUNE_OPTIMIZERS = ("adam", "adamw")
 DEFAULT_TUNE_WEIGHT_DECAYS = (0.0, 1e-6, 1e-5, 1e-4)
 DEFAULT_SCHEDULER_MILESTONES = (10, 20)
+PROGRESS_LOG_NAME = "progress.log"
+PROGRESS_JSONL_NAME = "progress.jsonl"
+STATUS_JSON_NAME = "status.json"
 
 
 def _in_notebook() -> bool:
@@ -83,6 +87,91 @@ def _progress_enabled() -> bool:
     if not stream.isatty():
         return False
     return os.environ.get("TERM", "").lower() != "dumb"
+
+
+def _event_timestamp() -> str:
+    return datetime.now().isoformat(timespec="seconds")
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, tuple):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, list):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, np.generic):
+        return value.item()
+    return value
+
+
+def _format_value(value: Any) -> str:
+    if isinstance(value, float):
+        return f"{value:.4f}"
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, (list, tuple)):
+        return ",".join(_format_value(item) for item in value)
+    if isinstance(value, bool):
+        return str(value).lower()
+    return str(value)
+
+
+def _format_log_line(event: str, payload: dict[str, Any]) -> str:
+    parts = [event]
+    for key, value in payload.items():
+        if key == "ts":
+            continue
+        parts.append(f"{key}={_format_value(value)}")
+    return f"[{payload['ts']}] " + " ".join(parts)
+
+
+def _append_progress_line(path: Path, line: str) -> None:
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(line + "\n")
+
+
+def _write_status_json(path: Path, payload: dict[str, Any]) -> None:
+    with path.open("w", encoding="utf-8") as handle:
+        json.dump(_json_safe(payload), handle, ensure_ascii=False, indent=2)
+
+
+def _emit_progress(
+    log_root: Path,
+    event: str,
+    payload: dict[str, Any],
+    *,
+    status: dict[str, Any] | None = None,
+) -> None:
+    event_payload = {"ts": payload.get("ts", _event_timestamp()), "event": event, **payload}
+    progress_log_path = log_root / PROGRESS_LOG_NAME
+    progress_jsonl_path = log_root / PROGRESS_JSONL_NAME
+    status_json_path = log_root / STATUS_JSON_NAME
+
+    _append_progress_line(progress_log_path, _format_log_line(event, event_payload))
+    with progress_jsonl_path.open("a", encoding="utf-8") as handle:
+        json.dump(_json_safe(event_payload), handle, ensure_ascii=False)
+        handle.write("\n")
+
+    status_payload = status if status is not None else event_payload
+    _write_status_json(status_json_path, status_payload)
+
+
+def _progress_paths(log_root: Path) -> dict[str, Path]:
+    return {
+        "progress_log_path": log_root / PROGRESS_LOG_NAME,
+        "progress_jsonl_path": log_root / PROGRESS_JSONL_NAME,
+        "status_json_path": log_root / STATUS_JSON_NAME,
+    }
+
+
+def _trial_state_counts(trials: list[Any]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in trials:
+        state_name = str(getattr(item.state, "name", item.state)).lower()
+        counts[state_name] = counts.get(state_name, 0) + 1
+    return counts
 
 
 @dataclass(frozen=True)
@@ -566,6 +655,7 @@ def _train_model(
     run_idx: int,
     trial: Any | None = None,
     trial_step_offset: int = 0,
+    progress_callback: Callable[[str, dict[str, Any], dict[str, Any] | None], None] | None = None,
 ) -> dict[str, Any]:
     optimizer = _build_optimizer(
         config.optimizer,
@@ -586,8 +676,11 @@ def _train_model(
     early_stopped = False
     stopped_epoch: int | None = None
     progress_enabled = _progress_enabled()
+    train_started_perf = time.perf_counter()
+    epoch_durations: list[float] = []
 
     for epoch in range(1, config.epochs + 1):
+        epoch_started_perf = time.perf_counter()
         model.train()
         running_loss = 0.0
         for inputs, targets in tqdm(
@@ -617,6 +710,9 @@ def _train_model(
         epoch_lrs.append(float(optimizer.param_groups[0]["lr"]))
         epoch_losses.append(float(epoch_loss))
         epoch_valacc.append(float(val_acc))
+        epoch_duration_seconds = float(time.perf_counter() - epoch_started_perf)
+        epoch_durations.append(epoch_duration_seconds)
+        elapsed_train_seconds = float(time.perf_counter() - train_started_perf)
 
         if trial is not None:
             _report_trial(trial, float(val_acc), trial_step_offset + epoch)
@@ -633,6 +729,39 @@ def _train_model(
 
         _step_lr_scheduler(scheduler, float(val_acc))
 
+        if progress_callback is not None:
+            progress_callback(
+                "epoch_end",
+                {
+                    "run": run_idx + 1,
+                    "runs": config.runs,
+                    "epoch": epoch,
+                    "epochs": config.epochs,
+                    "train_loss": float(epoch_loss),
+                    "val_acc": float(val_acc),
+                    "best_val_acc": float(best_val_acc),
+                    "best_epoch": best_epoch,
+                    "lr": float(optimizer.param_groups[0]["lr"]),
+                    "no_improve_count": epochs_without_improvement,
+                    "early_stopping_patience": config.early_stopping_patience,
+                    "epoch_duration_seconds": epoch_duration_seconds,
+                    "elapsed_train_seconds": elapsed_train_seconds,
+                },
+                {
+                    "phase": "train",
+                    "run": run_idx + 1,
+                    "runs": config.runs,
+                    "epoch": epoch,
+                    "epochs": config.epochs,
+                    "best_val_acc": float(best_val_acc),
+                    "best_epoch": best_epoch,
+                    "no_improve_count": epochs_without_improvement,
+                    "early_stopping_patience": config.early_stopping_patience,
+                    "elapsed_train_seconds": elapsed_train_seconds,
+                    "epoch_duration_seconds": epoch_duration_seconds,
+                },
+            )
+
         if (
             config.early_stopping_patience > 0
             and epochs_without_improvement >= config.early_stopping_patience
@@ -648,6 +777,8 @@ def _train_model(
         "train_loss_per_epoch": epoch_losses,
         "val_acc_per_epoch": epoch_valacc,
         "lr_per_epoch": epoch_lrs,
+        "epoch_duration_seconds": epoch_durations,
+        "train_wall_seconds": float(time.perf_counter() - train_started_perf),
         "best_val_acc": best_val_acc if best_val_acc != float("-inf") else 0.0,
         "best_epoch": best_epoch,
         "epochs_completed": len(epoch_losses),
@@ -671,6 +802,8 @@ def _predict_labels(model: torch.nn.Module, loader: DataLoader, device: str) -> 
 def run_train_eval_mrun(config: TrainEvalConfig) -> dict[str, Any]:
     _validate_train_eval_config(config)
 
+    overall_started_at = datetime.now()
+    overall_started_perf = time.perf_counter()
     device = "cuda" if torch.cuda.is_available() else "cpu"
     resize_hw = _parse_resize_arg(config.resize)
 
@@ -692,6 +825,7 @@ def run_train_eval_mrun(config: TrainEvalConfig) -> dict[str, Any]:
     lr_png_path = run_dir / "lr_curves.png"
     loss_png_path = run_dir / "loss_curves.png"
     valacc_png_path = run_dir / "val_acc_curves.png"
+    progress_paths = _progress_paths(run_dir)
 
     all_runs: list[dict[str, Any]] = []
     all_test_acc: list[float] = []
@@ -704,14 +838,69 @@ def run_train_eval_mrun(config: TrainEvalConfig) -> dict[str, Any]:
     all_lr_histories: list[list[float]] = []
     all_loss_histories: list[list[float]] = []
     all_valacc_histories: list[list[float]] = []
+    all_run_total_seconds: list[float] = []
+    all_train_wall_seconds: list[float] = []
+    all_test_inference_seconds: list[float] = []
+    all_test_samples_per_second: list[float] = []
+
+    _emit_progress(
+        run_dir,
+        "train_eval_start",
+        {
+            "mode": "train_eval_mrun",
+            "model": config.model,
+            "pretrained": config.pretrained,
+            "epochs": config.epochs,
+            "runs": config.runs,
+            "device": device,
+            "log_dir": run_dir,
+        },
+        status={
+            "phase": "initializing",
+            "mode": "train_eval_mrun",
+            "model": config.model,
+            "runs": config.runs,
+            "device": device,
+            "started_at": overall_started_at.isoformat(timespec="seconds"),
+        },
+    )
 
     for run_idx in range(config.runs):
         run_seed = config.seed + run_idx
         set_seed(run_seed)
+        run_started_perf = time.perf_counter()
+        dataloaders_started_perf = time.perf_counter()
+
+        _emit_progress(
+            run_dir,
+            "run_start",
+            {
+                "run": run_idx + 1,
+                "runs": config.runs,
+                "seed": run_seed,
+                "model": config.model,
+                "batch": config.batch,
+                "optimizer": config.optimizer,
+                "lr": config.lr,
+                "weight_decay": config.weight_decay,
+            },
+            status={
+                "phase": "loading_data",
+                "run": run_idx + 1,
+                "runs": config.runs,
+                "seed": run_seed,
+                "model": config.model,
+                "batch": config.batch,
+                "optimizer": config.optimizer,
+                "lr": config.lr,
+                "weight_decay": config.weight_decay,
+            },
+        )
 
         train_loader, val_loader, test_loader, test_dataset = _build_dataloaders(
             config, device, run_seed, transform
         )
+        dataloaders_seconds = float(time.perf_counter() - dataloaders_started_perf)
 
         model = get_model(
             config.model,
@@ -726,14 +915,28 @@ def run_train_eval_mrun(config: TrainEvalConfig) -> dict[str, Any]:
             val_loader,
             device,
             run_idx=run_idx,
+            progress_callback=lambda event, payload, status=None: _emit_progress(
+                run_dir,
+                event,
+                {
+                    "mode": "train_eval_mrun",
+                    "model": config.model,
+                    "seed": run_seed,
+                    **payload,
+                },
+                status=status,
+            ),
         )
 
         epoch_losses = train_result["train_loss_per_epoch"]
         epoch_valacc = train_result["val_acc_per_epoch"]
         epoch_lrs = train_result["lr_per_epoch"]
         best_val_acc = float(train_result["best_val_acc"])
+        train_wall_seconds = float(train_result["train_wall_seconds"])
+        test_inference_started_perf = time.perf_counter()
 
         y_true, y_pred = _predict_labels(model, test_loader, device)
+        test_inference_seconds = float(time.perf_counter() - test_inference_started_perf)
 
         test_acc = float(accuracy_score(y_true, y_pred))
         class_to_idx = getattr(test_dataset, "class_to_idx", {})
@@ -761,6 +964,11 @@ def run_train_eval_mrun(config: TrainEvalConfig) -> dict[str, Any]:
             digits=4,
         )
         conf_mat = confusion_matrix(y_true, y_pred, labels=labels_order).tolist()
+        test_samples = len(y_true)
+        test_samples_per_second = (
+            float(test_samples / test_inference_seconds) if test_inference_seconds > 0 else None
+        )
+        run_total_seconds = float(time.perf_counter() - run_started_perf)
 
         print(
             f"[Run {run_idx + 1}/{config.runs}] seed={run_seed}  best_val_acc={best_val_acc:.3f}  "
@@ -779,11 +987,18 @@ def run_train_eval_mrun(config: TrainEvalConfig) -> dict[str, Any]:
             "train_loss_per_epoch": epoch_losses,
             "val_acc_per_epoch": epoch_valacc,
             "lr_per_epoch": epoch_lrs,
+            "epoch_duration_seconds": train_result["epoch_duration_seconds"],
             "best_val_acc": best_val_acc,
             "best_epoch": train_result["best_epoch"],
             "epochs_completed": train_result["epochs_completed"],
             "early_stopped": train_result["early_stopped"],
             "stopped_epoch": train_result["stopped_epoch"],
+            "dataloaders_seconds": dataloaders_seconds,
+            "train_wall_seconds": train_wall_seconds,
+            "test_inference_seconds": test_inference_seconds,
+            "test_samples": test_samples,
+            "test_samples_per_second": test_samples_per_second,
+            "run_total_seconds": run_total_seconds,
             "test_acc": test_acc,
             "test_f1": {
                 "macro": test_f1_macro,
@@ -814,9 +1029,51 @@ def run_train_eval_mrun(config: TrainEvalConfig) -> dict[str, Any]:
         all_lr_histories.append(epoch_lrs)
         all_loss_histories.append(epoch_losses)
         all_valacc_histories.append(epoch_valacc)
+        all_run_total_seconds.append(run_total_seconds)
+        all_train_wall_seconds.append(train_wall_seconds)
+        all_test_inference_seconds.append(test_inference_seconds)
+        if test_samples_per_second is not None:
+            all_test_samples_per_second.append(test_samples_per_second)
 
+        _emit_progress(
+            run_dir,
+            "run_end",
+            {
+                "run": run_idx + 1,
+                "runs": config.runs,
+                "seed": run_seed,
+                "status": "early_stop" if train_result["early_stopped"] else "complete",
+                "best_epoch": train_result["best_epoch"],
+                "epochs_completed": train_result["epochs_completed"],
+                "best_val_acc": best_val_acc,
+                "test_acc": test_acc,
+                "macro_f1": test_f1_macro,
+                "train_wall_seconds": train_wall_seconds,
+                "test_inference_seconds": test_inference_seconds,
+                "run_total_seconds": run_total_seconds,
+            },
+            status={
+                "phase": "run_complete",
+                "run": run_idx + 1,
+                "runs": config.runs,
+                "seed": run_seed,
+                "status": "early_stop" if train_result["early_stopped"] else "complete",
+                "best_epoch": train_result["best_epoch"],
+                "epochs_completed": train_result["epochs_completed"],
+                "best_val_acc": best_val_acc,
+                "test_acc": test_acc,
+                "train_wall_seconds": train_wall_seconds,
+                "test_inference_seconds": test_inference_seconds,
+                "run_total_seconds": run_total_seconds,
+            },
+        )
+
+    completed_at = datetime.now()
+    total_wall_seconds = float(time.perf_counter() - overall_started_perf)
     summary = {
         "timestamp": timestamp,
+        "started_at": overall_started_at.isoformat(timespec="seconds"),
+        "completed_at": completed_at.isoformat(timespec="seconds"),
         "args": {
             **asdict(config),
             "data_root": str(config.data_root),
@@ -824,6 +1081,37 @@ def run_train_eval_mrun(config: TrainEvalConfig) -> dict[str, Any]:
         },
         "device": device,
         "runs": all_runs,
+        "runtime": {
+            "total_wall_seconds": total_wall_seconds,
+            "run_total_seconds_mean": (
+                float(np.mean(all_run_total_seconds)) if all_run_total_seconds else None
+            ),
+            "run_total_seconds_std": (
+                float(np.std(all_run_total_seconds, ddof=0)) if all_run_total_seconds else None
+            ),
+            "train_wall_seconds_mean": (
+                float(np.mean(all_train_wall_seconds)) if all_train_wall_seconds else None
+            ),
+            "train_wall_seconds_std": (
+                float(np.std(all_train_wall_seconds, ddof=0)) if all_train_wall_seconds else None
+            ),
+            "test_inference_seconds_mean": (
+                float(np.mean(all_test_inference_seconds)) if all_test_inference_seconds else None
+            ),
+            "test_inference_seconds_std": (
+                float(np.std(all_test_inference_seconds, ddof=0))
+                if all_test_inference_seconds
+                else None
+            ),
+            "test_samples_per_second_mean": (
+                float(np.mean(all_test_samples_per_second)) if all_test_samples_per_second else None
+            ),
+            "test_samples_per_second_std": (
+                float(np.std(all_test_samples_per_second, ddof=0))
+                if all_test_samples_per_second
+                else None
+            ),
+        },
         "summary": {
             "test_acc_mean": float(np.mean(all_test_acc)) if all_test_acc else None,
             "test_acc_std": float(np.std(all_test_acc, ddof=0)) if all_test_acc else None,
@@ -904,6 +1192,27 @@ def run_train_eval_mrun(config: TrainEvalConfig) -> dict[str, Any]:
         valacc_png_path,
     )
 
+    _emit_progress(
+        run_dir,
+        "train_eval_end",
+        {
+            "mode": "train_eval_mrun",
+            "runs": config.runs,
+            "total_wall_seconds": total_wall_seconds,
+            "test_acc_mean": summary["summary"]["test_acc_mean"],
+            "macro_f1_mean": summary["summary"]["macro_f1_mean"],
+        },
+        status={
+            "phase": "completed",
+            "mode": "train_eval_mrun",
+            "runs": config.runs,
+            "completed_at": completed_at.isoformat(timespec="seconds"),
+            "total_wall_seconds": total_wall_seconds,
+            "test_acc_mean": summary["summary"]["test_acc_mean"],
+            "macro_f1_mean": summary["summary"]["macro_f1_mean"],
+        },
+    )
+
     return {
         "summary": summary,
         "run_dir": run_dir,
@@ -911,6 +1220,7 @@ def run_train_eval_mrun(config: TrainEvalConfig) -> dict[str, Any]:
         "lr_png_path": lr_png_path,
         "loss_png_path": loss_png_path,
         "valacc_png_path": valacc_png_path,
+        **progress_paths,
     }
 
 
@@ -986,9 +1296,16 @@ def _import_optuna() -> Any:
     return optuna
 
 
-def _run_validation_mrun(config: TrainEvalConfig, *, trial: Any | None = None) -> dict[str, Any]:
+def _run_validation_mrun(
+    config: TrainEvalConfig,
+    *,
+    trial: Any | None = None,
+    progress_callback: Callable[[str, dict[str, Any], dict[str, Any] | None], None] | None = None,
+) -> dict[str, Any]:
     _validate_train_eval_config(config)
 
+    validation_started_at = datetime.now()
+    validation_started_perf = time.perf_counter()
     device = "cuda" if torch.cuda.is_available() else "cpu"
     resize_hw = _parse_resize_arg(config.resize)
 
@@ -1001,12 +1318,59 @@ def _run_validation_mrun(config: TrainEvalConfig, *, trial: Any | None = None) -
     transform = build_transform(config.in_ch, resize_hw)
     all_runs: list[dict[str, Any]] = []
     best_val_scores: list[float] = []
+    all_run_total_seconds: list[float] = []
+    all_train_wall_seconds: list[float] = []
+
+    if progress_callback is not None:
+        progress_callback(
+            "validation_start",
+            {
+                "runs": config.runs,
+                "epochs": config.epochs,
+                "model": config.model,
+                "batch": config.batch,
+                "optimizer": config.optimizer,
+                "lr": config.lr,
+                "weight_decay": config.weight_decay,
+            },
+            {
+                "phase": "validation_initializing",
+                "runs": config.runs,
+                "epochs": config.epochs,
+                "model": config.model,
+            },
+        )
 
     for run_idx in range(config.runs):
         run_seed = config.seed + run_idx
         set_seed(run_seed)
+        run_started_perf = time.perf_counter()
+        dataloaders_started_perf = time.perf_counter()
+
+        if progress_callback is not None:
+            progress_callback(
+                "validation_run_start",
+                {
+                    "run": run_idx + 1,
+                    "runs": config.runs,
+                    "seed": run_seed,
+                    "model": config.model,
+                    "batch": config.batch,
+                    "optimizer": config.optimizer,
+                    "lr": config.lr,
+                    "weight_decay": config.weight_decay,
+                },
+                {
+                    "phase": "validation_loading_data",
+                    "run": run_idx + 1,
+                    "runs": config.runs,
+                    "seed": run_seed,
+                    "model": config.model,
+                },
+            )
 
         train_loader, val_loader = _build_train_val_dataloaders(config, device, run_seed, transform)
+        dataloaders_seconds = float(time.perf_counter() - dataloaders_started_perf)
 
         model = get_model(
             config.model,
@@ -1023,25 +1387,96 @@ def _run_validation_mrun(config: TrainEvalConfig, *, trial: Any | None = None) -
             run_idx=run_idx,
             trial=trial,
             trial_step_offset=run_idx * config.epochs,
+            progress_callback=progress_callback,
         )
 
         best_val_acc = float(train_result["best_val_acc"])
+        train_wall_seconds = float(train_result["train_wall_seconds"])
+        run_total_seconds = float(time.perf_counter() - run_started_perf)
         best_val_scores.append(best_val_acc)
+        all_run_total_seconds.append(run_total_seconds)
+        all_train_wall_seconds.append(train_wall_seconds)
         all_runs.append(
             {
                 "run": run_idx + 1,
                 "seed": run_seed,
+                "dataloaders_seconds": dataloaders_seconds,
+                "run_total_seconds": run_total_seconds,
                 **train_result,
             }
         )
 
-    return {
+        if progress_callback is not None:
+            progress_callback(
+                "validation_run_end",
+                {
+                    "run": run_idx + 1,
+                    "runs": config.runs,
+                    "seed": run_seed,
+                    "best_epoch": train_result["best_epoch"],
+                    "epochs_completed": train_result["epochs_completed"],
+                    "best_val_acc": best_val_acc,
+                    "train_wall_seconds": train_wall_seconds,
+                    "run_total_seconds": run_total_seconds,
+                },
+                {
+                    "phase": "validation_run_complete",
+                    "run": run_idx + 1,
+                    "runs": config.runs,
+                    "seed": run_seed,
+                    "best_epoch": train_result["best_epoch"],
+                    "best_val_acc": best_val_acc,
+                    "train_wall_seconds": train_wall_seconds,
+                    "run_total_seconds": run_total_seconds,
+                },
+            )
+
+    completed_at = datetime.now()
+    total_wall_seconds = float(time.perf_counter() - validation_started_perf)
+    result = {
         "config": _serializable_dataclass(config),
         "device": device,
+        "started_at": validation_started_at.isoformat(timespec="seconds"),
+        "completed_at": completed_at.isoformat(timespec="seconds"),
         "runs": all_runs,
         "score": float(np.mean(best_val_scores)) if best_val_scores else 0.0,
         "score_std": float(np.std(best_val_scores, ddof=0)) if best_val_scores else 0.0,
+        "runtime": {
+            "total_wall_seconds": total_wall_seconds,
+            "run_total_seconds_mean": (
+                float(np.mean(all_run_total_seconds)) if all_run_total_seconds else None
+            ),
+            "run_total_seconds_std": (
+                float(np.std(all_run_total_seconds, ddof=0)) if all_run_total_seconds else None
+            ),
+            "train_wall_seconds_mean": (
+                float(np.mean(all_train_wall_seconds)) if all_train_wall_seconds else None
+            ),
+            "train_wall_seconds_std": (
+                float(np.std(all_train_wall_seconds, ddof=0)) if all_train_wall_seconds else None
+            ),
+        },
     }
+
+    if progress_callback is not None:
+        progress_callback(
+            "validation_end",
+            {
+                "runs": config.runs,
+                "score": result["score"],
+                "score_std": result["score_std"],
+                "total_wall_seconds": total_wall_seconds,
+            },
+            {
+                "phase": "validation_complete",
+                "runs": config.runs,
+                "score": result["score"],
+                "score_std": result["score_std"],
+                "total_wall_seconds": total_wall_seconds,
+            },
+        )
+
+    return result
 
 
 def _suggest_train_eval_config(config: TuneConfig, trial: Any) -> TrainEvalConfig:
@@ -1123,6 +1558,9 @@ def _train_eval_config_from_params(
 
 
 def _serialize_optuna_trial(trial: Any) -> dict[str, Any]:
+    duration_seconds = None
+    if trial.datetime_start is not None and trial.datetime_complete is not None:
+        duration_seconds = float((trial.datetime_complete - trial.datetime_start).total_seconds())
     return {
         "number": trial.number,
         "state": trial.state.name,
@@ -1131,6 +1569,7 @@ def _serialize_optuna_trial(trial: Any) -> dict[str, Any]:
         "user_attrs": trial.user_attrs,
         "datetime_start": trial.datetime_start.isoformat() if trial.datetime_start else None,
         "datetime_complete": trial.datetime_complete.isoformat() if trial.datetime_complete else None,
+        "duration_seconds": duration_seconds,
     }
 
 
@@ -1138,12 +1577,15 @@ def run_tune_cnn(config: TuneConfig) -> dict[str, Any]:
     _validate_tune_config(config)
     optuna = _import_optuna()
 
+    study_started_at = datetime.now()
+    study_started_perf = time.perf_counter()
     log_root = config.log_dir
     log_root.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     tune_dir = log_root / timestamp
     tune_dir.mkdir(parents=True, exist_ok=True)
     log_json_path = tune_dir / "optuna_tuning_log.json"
+    progress_paths = _progress_paths(tune_dir)
 
     sampler = optuna.samplers.TPESampler(seed=config.seed)
     pruner = optuna.pruners.MedianPruner(
@@ -1159,12 +1601,198 @@ def run_tune_cnn(config: TuneConfig) -> dict[str, Any]:
         load_if_exists=config.storage is not None,
     )
 
+    _emit_progress(
+        tune_dir,
+        "study_start",
+        {
+            "mode": "tune_cnn",
+            "trials": config.trials,
+            "epochs": config.epochs,
+            "runs": config.runs,
+            "models": list(config.model_candidates),
+            "study_name": study.study_name,
+        },
+        status={
+            "phase": "initializing",
+            "mode": "tune_cnn",
+            "trials": config.trials,
+            "epochs": config.epochs,
+            "runs": config.runs,
+            "models": list(config.model_candidates),
+            "study_name": study.study_name,
+            "started_at": study_started_at.isoformat(timespec="seconds"),
+        },
+    )
+
     def objective(trial: Any) -> float:
+        trial_started_perf = time.perf_counter()
         train_config = _suggest_train_eval_config(config, trial)
         trial.set_user_attr("train_config", _serializable_dataclass(train_config))
-        validation_result = _run_validation_mrun(train_config, trial=trial)
+        trial_label = trial.number + 1
+
+        def trial_progress_callback(
+            event: str,
+            payload: dict[str, Any],
+            status: dict[str, Any] | None = None,
+        ) -> None:
+            event_payload = {
+                "trial": trial.number,
+                "trial_label": trial_label,
+                "trials": config.trials,
+                **payload,
+            }
+            status_payload = None
+            if status is not None:
+                status_payload = {
+                    "trial": trial.number,
+                    "trial_label": trial_label,
+                    "trials": config.trials,
+                    **status,
+                }
+            _emit_progress(tune_dir, event, event_payload, status=status_payload)
+
+        _emit_progress(
+            tune_dir,
+            "trial_start",
+            {
+                "trial": trial.number,
+                "trial_label": trial_label,
+                "trials": config.trials,
+                "model": train_config.model,
+                "batch": train_config.batch,
+                "optimizer": train_config.optimizer,
+                "lr": train_config.lr,
+                "weight_decay": train_config.weight_decay,
+            },
+            status={
+                "phase": "trial_running",
+                "trial": trial.number,
+                "trial_label": trial_label,
+                "trials": config.trials,
+                "model": train_config.model,
+                "batch": train_config.batch,
+                "optimizer": train_config.optimizer,
+                "lr": train_config.lr,
+                "weight_decay": train_config.weight_decay,
+            },
+        )
+
+        try:
+            validation_result = _run_validation_mrun(
+                train_config,
+                trial=trial,
+                progress_callback=trial_progress_callback,
+            )
+        except optuna.TrialPruned:
+            trial_duration_seconds = float(time.perf_counter() - trial_started_perf)
+            _emit_progress(
+                tune_dir,
+                "trial_end",
+                {
+                    "trial": trial.number,
+                    "trial_label": trial_label,
+                    "trials": config.trials,
+                    "status": "pruned",
+                    "trial_duration_seconds": trial_duration_seconds,
+                },
+                status={
+                    "phase": "trial_pruned",
+                    "trial": trial.number,
+                    "trial_label": trial_label,
+                    "trials": config.trials,
+                    "status": "pruned",
+                    "trial_duration_seconds": trial_duration_seconds,
+                },
+            )
+            raise
+        except Exception as exc:
+            trial_duration_seconds = float(time.perf_counter() - trial_started_perf)
+            _emit_progress(
+                tune_dir,
+                "trial_end",
+                {
+                    "trial": trial.number,
+                    "trial_label": trial_label,
+                    "trials": config.trials,
+                    "status": "failed",
+                    "trial_duration_seconds": trial_duration_seconds,
+                    "error": str(exc),
+                },
+                status={
+                    "phase": "trial_failed",
+                    "trial": trial.number,
+                    "trial_label": trial_label,
+                    "trials": config.trials,
+                    "status": "failed",
+                    "trial_duration_seconds": trial_duration_seconds,
+                    "error": str(exc),
+                },
+            )
+            raise
+
         trial.set_user_attr("validation", validation_result)
-        return float(validation_result["score"])
+        trial_duration_seconds = float(time.perf_counter() - trial_started_perf)
+        score = float(validation_result["score"])
+        _emit_progress(
+            tune_dir,
+            "trial_end",
+            {
+                "trial": trial.number,
+                "trial_label": trial_label,
+                "trials": config.trials,
+                "status": "complete",
+                "score": score,
+                "best_val_acc": score,
+                "trial_duration_seconds": trial_duration_seconds,
+                "best_epoch": max(
+                    (int(run_item["best_epoch"]) for run_item in validation_result["runs"]),
+                    default=0,
+                ),
+            },
+            status={
+                "phase": "trial_complete",
+                "trial": trial.number,
+                "trial_label": trial_label,
+                "trials": config.trials,
+                "status": "complete",
+                "score": score,
+                "trial_duration_seconds": trial_duration_seconds,
+            },
+        )
+        return score
+
+    def study_progress_callback(study_obj: Any, frozen_trial: Any) -> None:
+        counts = _trial_state_counts(study_obj.trials)
+        best_trial_number = None
+        best_value = None
+        try:
+            best_trial_number = study_obj.best_trial.number
+            best_value = study_obj.best_value
+        except ValueError:
+            best_trial_number = None
+            best_value = None
+        progress_payload = {
+            "completed": counts.get("complete", 0),
+            "pruned": counts.get("pruned", 0),
+            "failed": counts.get("fail", 0),
+            "running": counts.get("running", 0),
+            "total_recorded_trials": len(study_obj.trials),
+            "target_trials": config.trials,
+            "last_trial": frozen_trial.number,
+            "last_state": frozen_trial.state.name.lower(),
+            "best_trial": best_trial_number,
+            "best_value": best_value,
+            "elapsed_study_seconds": float(time.perf_counter() - study_started_perf),
+        }
+        _emit_progress(
+            tune_dir,
+            "study_progress",
+            progress_payload,
+            status={
+                "phase": "study_running",
+                **progress_payload,
+            },
+        )
 
     study.optimize(
         objective,
@@ -1172,6 +1800,7 @@ def run_tune_cnn(config: TuneConfig) -> dict[str, Any]:
         timeout=config.timeout,
         n_jobs=config.n_jobs,
         show_progress_bar=_progress_enabled(),
+        callbacks=[study_progress_callback],
     )
 
     best_trial = None
@@ -1180,12 +1809,20 @@ def run_tune_cnn(config: TuneConfig) -> dict[str, Any]:
     except ValueError:
         best_trial = None
 
+    completed_at = datetime.now()
+    total_wall_seconds = float(time.perf_counter() - study_started_perf)
+
     summary: dict[str, Any] = {
         "timestamp": timestamp,
+        "started_at": study_started_at.isoformat(timespec="seconds"),
+        "completed_at": completed_at.isoformat(timespec="seconds"),
         "args": _serializable_dataclass(config),
         "direction": "maximize",
         "objective": "mean best validation accuracy across runs",
         "study_name": study.study_name,
+        "runtime": {
+            "total_wall_seconds": total_wall_seconds,
+        },
         "best_trial": _serialize_optuna_trial(best_trial) if best_trial is not None else None,
         "trials": [_serialize_optuna_trial(trial) for trial in study.trials],
     }
@@ -1193,22 +1830,65 @@ def run_tune_cnn(config: TuneConfig) -> dict[str, Any]:
         json.dump(summary, handle, ensure_ascii=False, indent=2)
 
     best_eval_result: dict[str, Any] | None = None
+    best_eval_duration_seconds: float | None = None
     if best_trial is not None and config.evaluate_best:
         best_config = _train_eval_config_from_params(
             config,
             best_trial.params,
             log_dir=tune_dir / "best_eval",
         )
+        best_eval_started_perf = time.perf_counter()
+        _emit_progress(
+            tune_dir,
+            "best_eval_start",
+            {
+                "trial": best_trial.number,
+                "model": best_config.model,
+                "batch": best_config.batch,
+                "optimizer": best_config.optimizer,
+                "lr": best_config.lr,
+                "weight_decay": best_config.weight_decay,
+            },
+            status={
+                "phase": "best_eval_running",
+                "trial": best_trial.number,
+                "model": best_config.model,
+                "batch": best_config.batch,
+                "optimizer": best_config.optimizer,
+                "lr": best_config.lr,
+                "weight_decay": best_config.weight_decay,
+            },
+        )
         best_eval_result = run_train_eval_mrun(best_config)
+        best_eval_duration_seconds = float(time.perf_counter() - best_eval_started_perf)
 
     if best_eval_result is not None:
         summary["best_eval"] = {
             "run_dir": str(best_eval_result["run_dir"]),
             "log_json_path": str(best_eval_result["log_json_path"]),
             "summary": best_eval_result["summary"]["summary"],
+            "runtime": best_eval_result["summary"].get("runtime"),
+            "duration_seconds": best_eval_duration_seconds,
         }
         with log_json_path.open("w", encoding="utf-8") as handle:
             json.dump(summary, handle, ensure_ascii=False, indent=2)
+        _emit_progress(
+            tune_dir,
+            "best_eval_end",
+            {
+                "trial": best_trial.number,
+                "duration_seconds": best_eval_duration_seconds,
+                "test_acc_mean": best_eval_result["summary"]["summary"]["test_acc_mean"],
+                "macro_f1_mean": best_eval_result["summary"]["summary"]["macro_f1_mean"],
+            },
+            status={
+                "phase": "best_eval_complete",
+                "trial": best_trial.number,
+                "duration_seconds": best_eval_duration_seconds,
+                "test_acc_mean": best_eval_result["summary"]["summary"]["test_acc_mean"],
+                "macro_f1_mean": best_eval_result["summary"]["summary"]["macro_f1_mean"],
+            },
+        )
 
     if best_trial is not None:
         print(
@@ -1216,12 +1896,39 @@ def run_tune_cnn(config: TuneConfig) -> dict[str, Any]:
             f"params={best_trial.params}"
         )
 
+    counts = _trial_state_counts(study.trials)
+    _emit_progress(
+        tune_dir,
+        "study_end",
+        {
+            "mode": "tune_cnn",
+            "total_wall_seconds": total_wall_seconds,
+            "completed": counts.get("complete", 0),
+            "pruned": counts.get("pruned", 0),
+            "failed": counts.get("fail", 0),
+            "best_trial": best_trial.number if best_trial is not None else None,
+            "best_value": best_trial.value if best_trial is not None else None,
+        },
+        status={
+            "phase": "completed",
+            "mode": "tune_cnn",
+            "completed_at": completed_at.isoformat(timespec="seconds"),
+            "total_wall_seconds": total_wall_seconds,
+            "completed": counts.get("complete", 0),
+            "pruned": counts.get("pruned", 0),
+            "failed": counts.get("fail", 0),
+            "best_trial": best_trial.number if best_trial is not None else None,
+            "best_value": best_trial.value if best_trial is not None else None,
+        },
+    )
+
     return {
         "summary": summary,
         "study": study,
         "tune_dir": tune_dir,
         "log_json_path": log_json_path,
         "best_eval_result": best_eval_result,
+        **progress_paths,
     }
 
 
@@ -1233,15 +1940,37 @@ def run_tune_cnn_by_model(config: TuneConfig) -> dict[str, Any]:
     """Run an independent Optuna study for each requested model candidate."""
     _validate_tune_config(config)
 
+    aggregate_started_at = datetime.now()
+    aggregate_started_perf = time.perf_counter()
     log_root = config.log_dir
     log_root.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     tune_dir = log_root / f"{timestamp}_by_model"
     tune_dir.mkdir(parents=True, exist_ok=True)
     log_json_path = tune_dir / "per_model_tuning_log.json"
+    progress_paths = _progress_paths(tune_dir)
 
     model_results: list[dict[str, Any]] = []
     best_model: dict[str, Any] | None = None
+
+    _emit_progress(
+        tune_dir,
+        "per_model_study_start",
+        {
+            "mode": "tune_cnn_by_model",
+            "models": list(config.model_candidates),
+            "trials": config.trials,
+            "epochs": config.epochs,
+        },
+        status={
+            "phase": "initializing",
+            "mode": "tune_cnn_by_model",
+            "models": list(config.model_candidates),
+            "trials": config.trials,
+            "epochs": config.epochs,
+            "started_at": aggregate_started_at.isoformat(timespec="seconds"),
+        },
+    )
 
     for index, model_name in enumerate(config.model_candidates, start=1):
         safe_model = _safe_study_suffix(model_name)
@@ -1250,6 +1979,22 @@ def run_tune_cnn_by_model(config: TuneConfig) -> dict[str, Any]:
         study_name = None
         if config.study_name is not None:
             study_name = f"{config.study_name}_{safe_model}"
+
+        _emit_progress(
+            tune_dir,
+            "model_study_start",
+            {
+                "model_index": index,
+                "model_count": len(config.model_candidates),
+                "model": model_name,
+            },
+            status={
+                "phase": "model_study_running",
+                "model_index": index,
+                "model_count": len(config.model_candidates),
+                "model": model_name,
+            },
+        )
 
         model_config = replace(
             config,
@@ -1277,11 +2022,38 @@ def run_tune_cnn_by_model(config: TuneConfig) -> dict[str, Any]:
         ):
             best_model = model_summary
 
+        _emit_progress(
+            tune_dir,
+            "model_study_end",
+            {
+                "model_index": index,
+                "model_count": len(config.model_candidates),
+                "model": model_name,
+                "best_value": best_value,
+                "best_trial": best_trial.get("number") if best_trial is not None else None,
+            },
+            status={
+                "phase": "model_study_complete",
+                "model_index": index,
+                "model_count": len(config.model_candidates),
+                "model": model_name,
+                "best_value": best_value,
+                "best_trial": best_trial.get("number") if best_trial is not None else None,
+            },
+        )
+
+    completed_at = datetime.now()
+    total_wall_seconds = float(time.perf_counter() - aggregate_started_perf)
     aggregate_summary = {
         "timestamp": timestamp,
+        "started_at": aggregate_started_at.isoformat(timespec="seconds"),
+        "completed_at": completed_at.isoformat(timespec="seconds"),
         "args": _serializable_dataclass(config),
         "mode": "per_model",
         "objective": "best validation accuracy per independent model study",
+        "runtime": {
+            "total_wall_seconds": total_wall_seconds,
+        },
         "models": model_results,
         "best_model": best_model,
     }
@@ -1295,12 +2067,32 @@ def run_tune_cnn_by_model(config: TuneConfig) -> dict[str, Any]:
         )
     print(f"Saved per-model Optuna summary: {log_json_path}")
 
+    _emit_progress(
+        tune_dir,
+        "per_model_study_end",
+        {
+            "mode": "tune_cnn_by_model",
+            "total_wall_seconds": total_wall_seconds,
+            "best_model": best_model["model"] if best_model is not None else None,
+            "best_value": best_model["best_value"] if best_model is not None else None,
+        },
+        status={
+            "phase": "completed",
+            "mode": "tune_cnn_by_model",
+            "completed_at": completed_at.isoformat(timespec="seconds"),
+            "total_wall_seconds": total_wall_seconds,
+            "best_model": best_model["model"] if best_model is not None else None,
+            "best_value": best_model["best_value"] if best_model is not None else None,
+        },
+    )
+
     return {
         "summary": aggregate_summary,
         "tune_dir": tune_dir,
         "log_json_path": log_json_path,
         "model_results": model_results,
         "best_model": best_model,
+        **progress_paths,
     }
 
 

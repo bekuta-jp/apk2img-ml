@@ -341,6 +341,27 @@ python -m apk2img_ml tune-cnn \
   --log-dir ./results/optuna_cnn
 ```
 
+### 既存ログを見やすく要約
+
+複数の `optuna_tuning_log.json` と `best_eval/.../train_log.json` を横断して、
+データセット・事前学習有無・モデル・最良パラメータ・精度・タイムスタンプを標準出力へまとめます。
+
+```bash
+python -m apk2img_ml summarize-optuna-results \
+  --results-root ./results \
+  --sort-by test_acc
+```
+
+- `--latest-only`
+  - 同じ `dataset / pretrained / model` ごとに最新の tuning 実行だけを表示します
+- `--sort-by`
+  - `dataset`, `pretrained`, `model`, `tune_ts`, `best_eval_ts`, `val_acc`, `test_acc`, `macro_f1`, `micro_f1`, `weighted_f1`, `benign_f1`, `malware_f1` などで並べ替えられます
+  - `--sort-by dataset,model,pretrained` や `--sort-by dataset --sort-by model --sort-by pretrained` のように、優先順位付きの複数キー指定もできます
+- `--table-only`
+  - 詳細ブロックを省略して表だけ表示します
+- `--ascending`
+  - 数値列やタイムスタンプ列を昇順で見たいときに使います
+
 ## 注意点
 
 - `--resize none` と `--batch > 1` の組み合わせは、画像サイズが不揃いだと失敗する場合があります。

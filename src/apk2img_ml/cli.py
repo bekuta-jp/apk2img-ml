@@ -261,6 +261,30 @@ def _add_tune_cnn_parser(subparsers: argparse._SubParsersAction) -> None:
     parser.set_defaults(handler=_handle_tune_cnn)
 
 
+def _add_summarize_optuna_results_parser(subparsers: argparse._SubParsersAction) -> None:
+    from .cnn.tune_summary import available_summary_sort_columns
+
+    sort_columns = ", ".join(available_summary_sort_columns())
+    parser = subparsers.add_parser(
+        "summarize-optuna-results",
+        help="Summarize Optuna tuning logs under a results directory",
+    )
+    parser.add_argument("--results-root", type=Path, required=True)
+    parser.add_argument("--latest-only", action="store_true")
+    parser.add_argument(
+        "--sort-by",
+        action="append",
+        metavar="COLUMN[,COLUMN...]",
+        help=(
+            "Sort priority. Repeat this option or pass a comma-separated list. "
+            f"Available columns: {sort_columns}"
+        ),
+    )
+    parser.add_argument("--table-only", action="store_true")
+    parser.add_argument("--ascending", action="store_true")
+    parser.set_defaults(handler=_handle_summarize_optuna_results)
+
+
 def _handle_extract(args: argparse.Namespace) -> int:
     include_prefixes = None if args.include_none else tuple(args.include_prefix) if args.include_prefix else None
     exclude_prefixes = tuple(args.exclude_prefix) if args.exclude_prefix else None
@@ -473,6 +497,29 @@ def _handle_tune_cnn(args: argparse.Namespace) -> int:
     return 0
 
 
+def _handle_summarize_optuna_results(args: argparse.Namespace) -> int:
+    from .cnn.tune_summary import (
+        parse_sort_columns,
+        render_optuna_summary_report,
+        summarize_optuna_results,
+    )
+
+    report = summarize_optuna_results(
+        args.results_root,
+        latest_only=args.latest_only,
+    )
+    sort_by = parse_sort_columns(args.sort_by)
+    print(
+        render_optuna_summary_report(
+            report,
+            sort_by=sort_by,
+            table_only=args.table_only,
+            ascending=args.ascending,
+        )
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="apk2img-ml")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -483,6 +530,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_docvec_to_png_parser(subparsers)
     _add_train_eval_mrun_parser(subparsers)
     _add_tune_cnn_parser(subparsers)
+    _add_summarize_optuna_results_parser(subparsers)
 
     return parser
 
