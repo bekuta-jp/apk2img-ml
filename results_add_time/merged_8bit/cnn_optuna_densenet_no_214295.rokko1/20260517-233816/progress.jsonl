@@ -1,0 +1,5 @@
+{"ts": "2026-05-17T23:38:16", "event": "study_start", "mode": "tune_cnn", "trials": 100, "epochs": 100, "runs": 1, "models": ["densenet"], "study_name": "no-name-64303c5d-6c41-41fe-a2f1-d22c3d8b3611"}
+{"ts": "2026-05-17T23:38:16", "event": "trial_start", "trial": 0, "trial_label": 1, "trials": 100, "model": "densenet", "batch": 64, "optimizer": "adam", "lr": 0.0001937470520923951, "weight_decay": 1e-05}
+{"ts": "2026-05-17T23:38:17", "event": "validation_start", "trial": 0, "trial_label": 1, "trials": 100, "runs": 1, "epochs": 100, "model": "densenet", "batch": 64, "optimizer": "adam", "lr": 0.0001937470520923951, "weight_decay": 1e-05}
+{"ts": "2026-05-17T23:38:17", "event": "validation_run_start", "trial": 0, "trial_label": 1, "trials": 100, "run": 1, "runs": 1, "seed": 3407, "model": "densenet", "batch": 64, "optimizer": "adam", "lr": 0.0001937470520923951, "weight_decay": 1e-05}
+{"ts": "2026-05-17T23:38:17", "event": "trial_end", "trial": 0, "trial_label": 1, "trials": 100, "status": "failed", "trial_duration_seconds": 1.3544030990451574, "error": "[Errno 2] No such file or directory: 'apk2img-ml-datasets/data/sdhash/image_merged_8bit/dev'"}

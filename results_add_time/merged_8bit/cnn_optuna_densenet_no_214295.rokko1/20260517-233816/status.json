@@ -1,0 +1,9 @@
+{
+  "phase": "trial_failed",
+  "trial": 0,
+  "trial_label": 1,
+  "trials": 100,
+  "status": "failed",
+  "trial_duration_seconds": 1.3544030990451574,
+  "error": "[Errno 2] No such file or directory: 'apk2img-ml-datasets/data/sdhash/image_merged_8bit/dev'"
+}

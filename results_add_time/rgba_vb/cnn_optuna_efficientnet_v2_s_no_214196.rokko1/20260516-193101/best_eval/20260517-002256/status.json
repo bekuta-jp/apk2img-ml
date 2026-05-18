@@ -1,0 +1,9 @@
+{
+  "phase": "completed",
+  "mode": "train_eval_mrun",
+  "runs": 1,
+  "completed_at": "2026-05-17T00:35:10",
+  "total_wall_seconds": 734.2914163712412,
+  "test_acc_mean": 0.9455,
+  "macro_f1_mean": 0.945496062090486
+}

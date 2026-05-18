@@ -1,0 +1,11 @@
+{
+  "phase": "completed",
+  "mode": "tune_cnn",
+  "completed_at": "2026-05-16T03:42:41",
+  "total_wall_seconds": 24825.624847205356,
+  "completed": 16,
+  "pruned": 84,
+  "failed": 0,
+  "best_trial": 14,
+  "best_value": 0.9635
+}

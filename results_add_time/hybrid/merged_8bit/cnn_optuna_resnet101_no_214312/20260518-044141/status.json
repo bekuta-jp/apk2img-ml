@@ -1,0 +1,10 @@
+{
+  "trial": 50,
+  "trial_label": 51,
+  "trials": 100,
+  "phase": "validation_loading_data",
+  "run": 1,
+  "runs": 1,
+  "seed": 3407,
+  "model": "resnet101"
+}

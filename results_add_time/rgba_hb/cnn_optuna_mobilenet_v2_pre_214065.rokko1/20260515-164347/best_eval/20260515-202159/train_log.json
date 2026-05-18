@@ -1,0 +1,184 @@
+{
+  "timestamp": "20260515-202159",
+  "started_at": "2026-05-15T20:21:59",
+  "completed_at": "2026-05-15T20:28:51",
+  "args": {
+    "data_root": "apk2img-ml-datasets/data/sdhash/image_rgba_hb",
+    "model": "mobilenet_v2",
+    "pretrained": true,
+    "epochs": 100,
+    "batch": 8,
+    "lr": 0.0008244194815225545,
+    "optimizer": "adamw",
+    "weight_decay": 0.0,
+    "lr_scheduler": "none",
+    "scheduler_step_size": 5,
+    "scheduler_milestones": [
+      10,
+      20
+    ],
+    "scheduler_gamma": 0.1,
+    "scheduler_exp_gamma": 0.95,
+    "scheduler_patience": 2,
+    "scheduler_t_max": null,
+    "scheduler_eta_min": 0.0,
+    "scheduler_t_0": null,
+    "scheduler_t_mult": 1,
+    "scheduler_pct_start": 0.3,
+    "scheduler_div_factor": 25.0,
+    "scheduler_final_div_factor": 10000.0,
+    "workers": 4,
+    "in_ch": 1,
+    "resize": "256,256",
+    "seed": 3407,
+    "runs": 1,
+    "log_dir": "/home/IM25D009/git_workspace/results_add_time/rgba_hb/cnn_optuna_mobilenet_v2_pre_214065.rokko1/20260515-164347/best_eval",
+    "early_stopping_patience": 3,
+    "early_stopping_min_delta": 0.0,
+    "restore_best": true
+  },
+  "device": "cuda",
+  "runs": [
+    {
+      "run": 1,
+      "seed": 3407,
+      "epochs": 100,
+      "train_loss_per_epoch": [
+        0.4108663719817996,
+        0.22587072066077962,
+        0.167637651221361,
+        0.14059539370273705,
+        0.11609744750667596,
+        0.09326139601625619,
+        0.08888188147370238,
+        0.08210171768380678,
+        0.057741464859092956,
+        0.05821717984040151,
+        0.0503843921465932,
+        0.04162311615275848
+      ],
+      "val_acc_per_epoch": [
+        0.873,
+        0.9345,
+        0.9265,
+        0.9425,
+        0.953,
+        0.9575,
+        0.895,
+        0.9625,
+        0.9635,
+        0.9255,
+        0.956,
+        0.953
+      ],
+      "lr_per_epoch": [
+        0.0008244194815225545,
+        0.0008244194815225545,
+        0.0008244194815225545,
+        0.0008244194815225545,
+        0.0008244194815225545,
+        0.0008244194815225545,
+        0.0008244194815225545,
+        0.0008244194815225545,
+        0.0008244194815225545,
+        0.0008244194815225545,
+        0.0008244194815225545,
+        0.0008244194815225545
+      ],
+      "epoch_duration_seconds": [
+        34.318687384948134,
+        33.76578690111637,
+        33.86746457591653,
+        33.74939119257033,
+        33.69915595650673,
+        33.42506194859743,
+        34.03347525186837,
+        33.59527550265193,
+        33.69581946730614,
+        33.73293683119118,
+        33.705444276332855,
+        33.85740630887449
+      ],
+      "best_val_acc": 0.9635,
+      "best_epoch": 9,
+      "epochs_completed": 12,
+      "early_stopped": true,
+      "stopped_epoch": 12,
+      "dataloaders_seconds": 0.03427392803132534,
+      "train_wall_seconds": 405.5840707719326,
+      "test_inference_seconds": 6.331031233072281,
+      "test_samples": 2000,
+      "test_samples_per_second": 315.90430158554966,
+      "run_total_seconds": 412.09040050022304,
+      "test_acc": 0.957,
+      "test_f1": {
+        "macro": 0.9569993119889919,
+        "micro": 0.957,
+        "weighted": 0.9569993119889918,
+        "binary_malware": 0.9568273092369478,
+        "binary_benign": 0.9571713147410359,
+        "per_class": {
+          "benign": 0.9571713147410359,
+          "malware": 0.9568273092369478
+        }
+      },
+      "test_macro_f1": 0.9569993119889919,
+      "classification_report": "              precision    recall  f1-score   support\n\n      benign     0.9534    0.9610    0.9572      1000\n     malware     0.9607    0.9530    0.9568      1000\n\n    accuracy                         0.9570      2000\n   macro avg     0.9570    0.9570    0.9570      2000\nweighted avg     0.9570    0.9570    0.9570      2000\n",
+      "confusion_matrix": [
+        [
+          961,
+          39
+        ],
+        [
+          47,
+          953
+        ]
+      ],
+      "class_to_idx": {
+        "benign": 0,
+        "malware": 1
+      },
+      "label_order": {
+        "benign": 0,
+        "malware": 1
+      }
+    }
+  ],
+  "runtime": {
+    "total_wall_seconds": 412.095299128443,
+    "run_total_seconds_mean": 412.09040050022304,
+    "run_total_seconds_std": 0.0,
+    "train_wall_seconds_mean": 405.5840707719326,
+    "train_wall_seconds_std": 0.0,
+    "test_inference_seconds_mean": 6.331031233072281,
+    "test_inference_seconds_std": 0.0,
+    "test_samples_per_second_mean": 315.90430158554966,
+    "test_samples_per_second_std": 0.0
+  },
+  "summary": {
+    "test_acc_mean": 0.957,
+    "test_acc_std": 0.0,
+    "macro_f1_mean": 0.9569993119889919,
+    "macro_f1_std": 0.0,
+    "micro_f1_mean": 0.957,
+    "micro_f1_std": 0.0,
+    "weighted_f1_mean": 0.9569993119889918,
+    "weighted_f1_std": 0.0,
+    "binary_malware_f1_mean": 0.9568273092369478,
+    "binary_malware_f1_std": 0.0,
+    "binary_benign_f1_mean": 0.9571713147410359,
+    "binary_benign_f1_std": 0.0,
+    "per_class_f1_mean": [
+      0.9571713147410359,
+      0.9568273092369478
+    ],
+    "per_class_f1_std": [
+      0.0,
+      0.0
+    ],
+    "per_class_f1_order": [
+      "benign",
+      "malware"
+    ]
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "trial": 35,
+  "trial_label": 36,
+  "trials": 100,
+  "phase": "train",
+  "run": 1,
+  "runs": 1,
+  "epoch": 4,
+  "epochs": 100,
+  "best_val_acc": 0.9504752376188094,
+  "best_epoch": 3,
+  "no_improve_count": 1,
+  "early_stopping_patience": 3,
+  "elapsed_train_seconds": 325.6544042080641,
+  "epoch_duration_seconds": 81.1130639333278
+}

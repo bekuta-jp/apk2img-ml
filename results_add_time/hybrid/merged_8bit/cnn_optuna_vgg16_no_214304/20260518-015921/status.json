@@ -1,0 +1,9 @@
+{
+  "phase": "best_eval_running",
+  "trial": 69,
+  "model": "vgg16",
+  "batch": 16,
+  "optimizer": "adam",
+  "lr": 3.601356885217781e-05,
+  "weight_decay": 1e-06
+}
